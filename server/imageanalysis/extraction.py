@@ -1,36 +1,40 @@
 from __future__ import annotations
-from typing import Callable, NamedTuple
+
 from enum import Enum
-from numpy import (
-    vstack,
-    percentile,
-    asarray,
-    uint8,
-    bool_,
-    array,
-    empty,
-    column_stack,
-    where,
-    unique,
-    zeros as npzeros,
-)
 from pathlib import Path
+from typing import Annotated, Any, Callable, Final, NamedTuple, Optional, cast
+
+import numpy as np
 from cv2 import (
-    COLOR_BGR2RGB,
     COLOR_BGR2HSV,
-    COLOR_BGR2YCrCb,
+    COLOR_BGR2RGB,
     IMREAD_GRAYSCALE,
+    COLOR_BGR2YCrCb,
     cvtColor,
     imread,
 )
-from .configuration import Camera
 from cv2.typing import MatLike
-from typing import Final, Optional, Any, cast, Annotated
-from nptyping import NDArray, Shape, UInt8, Bool, UInt16
+from numpy import (
+    array,
+    asarray,
+    bool_,
+    column_stack,
+    empty,
+    percentile,
+    uint8,
+    unique,
+    vstack,
+    where,
+)
+from numpy import (
+    zeros as npzeros,
+)
+from numpy.typing import NDArray
 
+from .configuration import Camera
 
 type ColorImage = Annotated[
-    NDArray[Shape["Height, Width, PixelTriplet"], UInt8],
+    NDArray[np.uint8],
     "Represents a 3-channel image (H, W, 3)",
 ]
 """
@@ -38,7 +42,7 @@ Represents a 3-channel image (H, W, 3)"]
 """
 
 type ColorImageArray = Annotated[
-    NDArray[Shape["*, Height, Width, PixelTriplet"], UInt8],
+    NDArray[np.uint8],
     "Represents a batch of 3-channel images (N, H, W, 3)",
 ]
 """
@@ -46,7 +50,7 @@ Represents a batch of 3-channel images (N, H, W, 3)"]
 """
 
 type GrayScaleImage = Annotated[
-    NDArray[Shape["Height, Width"], UInt8],
+    NDArray[np.uint8],
     "Represents a single-channel grayscale image (H, W)",
 ]
 """
@@ -54,7 +58,7 @@ Represents a single-channel grayscale image (H, W)"]
 """
 
 type BitMapImage = Annotated[
-    NDArray[Shape["*, *"], Bool],
+    NDArray[np.bool_],
     "Represents a single-channel bitmap image (H, W)",
 ]
 """
@@ -62,7 +66,7 @@ Represents a single-channel bitmap image (H, W)"]
 """
 
 type PixelData = Annotated[
-    NDArray[Shape["*, 3"], UInt8],
+    NDArray[np.uint8],
     "Represents a list of pixels, each with 3 channels (N, 3)",
 ]
 """
@@ -70,28 +74,26 @@ Represents a list of pixels, each with 3 channels (N, 3)"]
 """
 
 type ComponentData = Annotated[
-    NDArray[Shape["*"], UInt8], "Represents a single channel of pixel data (N,)"
+    NDArray[np.uint8], "Represents a single channel of pixel data (N,)"
 ]
 """
 Represents a single channel of pixel data (N,)"]
 """
 
 type FrequencyTable = Annotated[
-    NDArray[Shape["*, 2"], UInt8], "Represents a frequency table (UniqueValues, 2)"
+    NDArray[np.uint8], "Represents a frequency table (UniqueValues, 2)"
 ]
 """
 Represents a frequency table (UniqueValues, 2)"]
 """
 
-type DecomposedData = Annotated[
-    NDArray[Shape["*"], Any], "Represents an array of frequency tables"
-]
+type DecomposedData = Annotated[NDArray[Any], "Represents an array of frequency tables"]
 """
 Represents an array of frequency tables"]
 """
 
 type ChannelData = Annotated[
-    NDArray[Shape["*"], UInt8], "Represents a single channel of pixel data (N,)"
+    NDArray[np.uint8], "Represents a single channel of pixel data (N,)"
 ]
 """
 Represents a single channel of pixel data (N,)"]
@@ -344,7 +346,7 @@ def get_datasets_vstack(
 
 
 def get_datasets_vstacks_sparse(
-    camera: Camera, indices: NDArray[Shape["*"], UInt16]
+    camera: Camera, indices: NDArray[np.uint16]
 ) -> tuple[ColorImage, ColorImage]:
     """
     Create sparse stacked images where output position matches index value.
@@ -412,7 +414,7 @@ def get_masks_vstack(
 
 
 def get_masks_vstacks_sparse(
-    camera: Camera, indices: NDArray[Shape["*"], UInt16]
+    camera: Camera, indices: NDArray[np.uint16]
 ) -> tuple[BitMapImage, BitMapImage]:
     from cv2 import imshow, waitKey
 
@@ -467,7 +469,7 @@ def get_masks_vstacks_sparse(
 
 
 def get_reference_vstacks_sparse(
-    camera: Camera, ctag: ColourTag, indices: NDArray[Shape["*"], UInt16]
+    camera: Camera, ctag: ColourTag, indices: NDArray[np.uint16]
 ) -> ColorImage:
     """
     Get sparse stacked images for reference datasets.

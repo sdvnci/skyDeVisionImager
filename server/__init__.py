@@ -23,9 +23,11 @@ from .geotiff import (
     GeoCoordinateArray,
     tfw_to_xyz,
     meshify,
+    mesh_to_geojson,
     plotly_surface,
     downsample_xyz,
     preprocess_data,
+    xyz_to_geojson,
     graph_plotly,
 )
 
@@ -109,9 +111,11 @@ __all__ = (
     "GeoCoordinateArray",
     "tfw_to_xyz",
     "meshify",
+    "mesh_to_geojson",
     "plotly_surface",
     "downsample_xyz",
     "preprocess_data",
+    "xyz_to_geojson",
     "graph_plotly",
     "ColorImage",
     "GrayScaleImage",

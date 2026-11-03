@@ -120,10 +120,22 @@ figure = graph_plotly(
     tifffile=Path("data/terrain.tif"),
     points=200,
     use_cache=True,
-    downsample_factor=2
 )
 
 figure.write_html("terrain.html")
+```
+
+### GeoJSON Export
+```python
+from server.geotiff import meshify, mesh_to_geojson, tfw_to_xyz, xyz_to_geojson
+from rasterio import open as rio_open
+
+with open("data/terrain.tfw", "r") as tfw:
+    with rio_open("data/terrain.tif") as tif:
+        xyz = tfw_to_xyz(tfw, tif)
+
+point_cloud = xyz_to_geojson(xyz, source_crs=tif.crs)          # GeoJSON MultiPoint
+surface = mesh_to_geojson(meshify(xyz), source_crs=tif.crs)    # GeoJSON MultiPolygon
 ```
 
 ### ROC Analysis for Cloud Detection

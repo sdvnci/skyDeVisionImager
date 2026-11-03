@@ -1,35 +1,140 @@
+import pickle
+from hashlib import md5
+from io import TextIOWrapper
+from pathlib import Path
+from typing import Literal, Optional
+
+import numpy as np
+from numba import njit, types  # type: ignore
 from numpy import (
-    array,
     arange,
-    linspace,
-    zeros,
-    meshgrid,
-    nanmin,
-    nanmax,
-    isnan,
+    array,
     float32,
     float64,
-    uint16,
-    percentile,
-    mean,
+    isnan,
+    linspace,
     log1p,
+    mean,
+    meshgrid,
+    nanmax,
+    nanmin,
+    percentile,
+    uint16,
+    zeros,
+)
+from numpy import (
     max as npmax,
+)
+from numpy import (
     min as npmin,
 )
-from scipy.ndimage import median_filter, gaussian_filter  # type: ignore
-from nptyping import NDArray, Shape, Float32, Bool  # type: ignore
-from plotly.graph_objects import Surface, Figure  # type: ignore
-from rasterio import open as rio_open, io  # type: ignore
+from numpy.typing import NDArray
+from plotly.graph_objects import Figure, Surface  # type: ignore
+from rasterio import io
+from rasterio import open as rio_open  # type: ignore
+from rasterio.crs import CRS
+from rasterio.warp import transform as warp_transform
 from scipy.interpolate import griddata  # type: ignore
-from numba import njit, types  # type: ignore
-from io import TextIOWrapper
-from typing import Optional
-from pathlib import Path
-from hashlib import md5
-import pickle
+from scipy.ndimage import gaussian_filter, median_filter  # type: ignore
 
-type CoordinateArray = NDArray[Shape["*, *"], Float32]
-type GeoCoordinateArray = NDArray[Shape["*, 3"], Float32]
+ColorScale = Literal[
+    "aggrnyl",
+    "agsunset",
+    "algae",
+    "amp",
+    "armyrose",
+    "balance",
+    "blackbody",
+    "bluered",
+    "blues",
+    "blugrn",
+    "bluyl",
+    "brbg",
+    "brwnyl",
+    "bugn",
+    "bupu",
+    "burg",
+    "burgyl",
+    "cividis",
+    "curl",
+    "darkmint",
+    "deep",
+    "delta",
+    "dense",
+    "earth",
+    "edge",
+    "electric",
+    "emrld",
+    "fall",
+    "geyser",
+    "gnbu",
+    "gray",
+    "greens",
+    "greys",
+    "haline",
+    "hot",
+    "hsv",
+    "ice",
+    "icefire",
+    "inferno",
+    "jet",
+    "magenta",
+    "magma",
+    "matter",
+    "mint",
+    "mrybm",
+    "mygbm",
+    "oranges",
+    "orrd",
+    "oryel",
+    "oxy",
+    "peach",
+    "phase",
+    "picnic",
+    "pinkyl",
+    "piyg",
+    "plasma",
+    "plotly3",
+    "portland",
+    "prgn",
+    "pubu",
+    "pubugn",
+    "puor",
+    "purd",
+    "purp",
+    "purples",
+    "purpor",
+    "rainbow",
+    "rdbu",
+    "rdgy",
+    "rdpu",
+    "rdylbu",
+    "rdylgn",
+    "redor",
+    "reds",
+    "solar",
+    "spectral",
+    "speed",
+    "sunset",
+    "sunsetdark",
+    "teal",
+    "tealgrn",
+    "tealrose",
+    "tempo",
+    "temps",
+    "thermal",
+    "tropic",
+    "turbid",
+    "turbo",
+    "twilight",
+    "viridis",
+    "ylgn",
+    "ylgnbu",
+    "ylorbr",
+    "ylorrd",
+]
+type CoordinateArray = NDArray[np.float32]
+type GeoCoordinateArray = NDArray[np.float32]
 
 
 @njit(
@@ -125,7 +230,7 @@ def tfw_to_xyz(
     fastmath=True,
     cache=True,
 )
-def mask_outliers_iqr(data: GeoCoordinateArray) -> NDArray[Shape["*"], Bool]:
+def mask_outliers_iqr(data: GeoCoordinateArray) -> NDArray[np.bool_]:
     """
     Generate a boolean mask to identify outliers in the z-coordinate of an XYZ array using the IQR method.
 
@@ -154,7 +259,7 @@ def meshify(
     scalar: float32 = float32(1.0),
     interpolation: str = "linear",
     smooth_sigma: float32 = float32(1.0),
-) -> NDArray[Shape["3, *"], Float32]:
+) -> NDArray[np.float32]:
 
     # Check we have at least 4 points to form a mesh
     if len(xyz) < 4:
@@ -181,8 +286,9 @@ def meshify(
         cache=True,
     )
     def data_prepare(
-        xyz: GeoCoordinateArray, points: uint16
-    ) -> tuple[NDArray[Shape["*"], Float32], ...]:
+        xyz: GeoCoordinateArray,
+        points: uint16,
+    ) -> tuple[NDArray[np.float32], ...]:
         mask = mask_outliers_iqr(xyz)
         xyz = xyz[mask]
         x, y, z = xyz[:, 0], xyz[:, 1], xyz[:, 2]
@@ -191,14 +297,6 @@ def meshify(
         x_min, x_max = npmin(x), npmax(x)
         y_min, y_max = npmin(y), npmax(y)
         z_min, z_max = npmin(z), npmax(z)
-
-        # Get aspect ratio for scaling grid
-        #x_range = x_max - x_min
-        #y_range = y_max - y_min
-        #z_range = z_max - z_min
-        #aspect_ratio = mean(array([x_range, y_range], dtype=float32)) / (
-        #    z_range + 1e-15
-        #)
 
         # Apply log scaling to z values to preserve detail
         z_shifted = z - z_min
@@ -242,12 +340,20 @@ def meshify(
 
 
 def plotly_surface(
-    meshes: NDArray[Shape["3, *"], Float32],
+    meshes: NDArray[np.float32],
     title: str = "Topography Mesh",
-    cmapstr: str = "viridis",
+    cmapstr: ColorScale = "viridis",
+    opacity: float32 = float32(0.85),
+    x_offset: float32 = float32(0.0),
+    y_offset: float32 = float32(0.0),
+    z_offset: float32 = float32(0.0),
     fig: Optional[Figure] = None,
 ) -> Figure:
+    # Offset copies, so the caller's mesh (which may be reused or cached) is left untouched
     x_mesh, y_mesh, z_mesh = meshes
+    x_mesh = x_mesh + x_offset
+    y_mesh = y_mesh + y_offset
+    z_mesh = z_mesh + z_offset
 
     z_min = nanmin(z_mesh)
     z_max = nanmax(z_mesh)
@@ -262,7 +368,7 @@ def plotly_surface(
             y=y_mesh,
             z=z_mesh,
             colorscale=cmapstr,
-            opacity=0.85,
+            opacity=opacity,
             showscale=False,
             hovertemplate="""x: %{x:.1f}
             <br>
@@ -382,80 +488,221 @@ def preprocess_data(
     return xyz
 
 
-def graph_plotly(
+def _is_wgs84_coordinate_pair(x: float, y: float) -> bool:
+    return -180.0 <= x <= 180.0 and -90.0 <= y <= 90.0
+
+
+def _normalize_geojson_xy(
+    xs: list[float], ys: list[float], source_crs: CRS | str | None
+) -> tuple[list[float], list[float]]:
+    if not xs:
+        return xs, ys
+
+    if source_crs is not None:
+        normalized_crs = CRS.from_user_input(source_crs)
+        if normalized_crs == CRS.from_epsg(4326):
+            return xs, ys
+
+        transformed_xs, transformed_ys = warp_transform(
+            normalized_crs, CRS.from_epsg(4326), xs, ys
+        )
+        return list(transformed_xs), list(transformed_ys)
+
+    if all(_is_wgs84_coordinate_pair(x, y) for x, y in zip(xs, ys)):
+        return xs, ys
+
+    raise ValueError(
+        "GeoJSON requires WGS84 longitude/latitude coordinates. "
+        "The provided coordinates look projected, so pass source_crs "
+        "(for example 'EPSG:3006') to reproject them."
+    )
+
+
+def xyz_to_geojson(
+    xyz: GeoCoordinateArray, source_crs: CRS | str | None = None
+) -> dict[str, object]:
+    """
+    Convert XYZ samples to a GeoJSON MultiPoint geometry.
+
+    This is the better fit when you want to preserve the original point cloud
+    without interpolating it into polygons.
+    """
+    valid_points = [
+        (float(point[0]), float(point[1]), float(point[2]))
+        for point in xyz
+        if not any(isnan(value) for value in point)
+    ]
+    xs = [point[0] for point in valid_points]
+    ys = [point[1] for point in valid_points]
+    normalized_xs, normalized_ys = _normalize_geojson_xy(xs, ys, source_crs)
+    coordinates = [
+        [x, y, point[2]]
+        for x, y, point in zip(normalized_xs, normalized_ys, valid_points)
+    ]
+    return {
+        "type": "MultiPoint",
+        "coordinates": coordinates,
+    }
+
+
+def mesh_to_geojson(
+    meshes: NDArray[np.float64], source_crs: CRS | str | None = None
+) -> dict[str, object]:
+    """
+    Convert a gridded mesh into a GeoJSON MultiPolygon geometry.
+
+    Each valid grid cell is emitted as a polygon ring with an optional Z value
+    on every coordinate so the surface shape is preserved.
+    """
+    if meshes.shape[0] != 3:
+        raise ValueError("Meshes must contain x, y, and z layers.")
+
+    x_mesh, y_mesh, z_mesh = meshes
+    if x_mesh.shape != y_mesh.shape or x_mesh.shape != z_mesh.shape:
+        raise ValueError("Mesh layers must have matching shapes.")
+    if x_mesh.ndim != 2 or x_mesh.shape[0] < 2 or x_mesh.shape[1] < 2:
+        raise ValueError(
+            "Mesh layers must be 2D grids with at least 2 rows and 2 columns."
+        )
+
+    normalized_xs, normalized_ys = _normalize_geojson_xy(
+        [float(value) for value in x_mesh.ravel()],
+        [float(value) for value in y_mesh.ravel()],
+        source_crs,
+    )
+    normalized_x_mesh = array(normalized_xs, dtype=float64).reshape(x_mesh.shape)
+    normalized_y_mesh = array(normalized_ys, dtype=float64).reshape(y_mesh.shape)
+
+    polygons: list[list[list[list[float]]]] = []
+    row_count, column_count = x_mesh.shape
+
+    for row in range(row_count - 1):
+        for column in range(column_count - 1):
+            corners = (
+                (
+                    normalized_x_mesh[row, column],
+                    normalized_y_mesh[row, column],
+                    z_mesh[row, column],
+                ),
+                (
+                    normalized_x_mesh[row, column + 1],
+                    normalized_y_mesh[row, column + 1],
+                    z_mesh[row, column + 1],
+                ),
+                (
+                    normalized_x_mesh[row + 1, column + 1],
+                    normalized_y_mesh[row + 1, column + 1],
+                    z_mesh[row + 1, column + 1],
+                ),
+                (
+                    normalized_x_mesh[row + 1, column],
+                    normalized_y_mesh[row + 1, column],
+                    z_mesh[row + 1, column],
+                ),
+            )
+
+            if any(isnan(value) for corner in corners for value in corner):
+                continue
+
+            ring = [
+                [float(x), float(y), float(z)] for x, y, z in (*corners, corners[0])
+            ]
+            polygons.append([ring])
+
+    return {
+        "type": "MultiPolygon",
+        "coordinates": polygons,
+    }
+
+
+def tif_to_mesh(
     tfwfile: Path,
     tifffile: Path,
     cachedir: Path = Path(__file__).parent / "__cache__",
     points: uint16 = uint16(200),
     use_cache: bool = True,
-    downsample_factor: int = 1,
-) -> Figure:
-
+) -> NDArray[np.float32]:
     if not tifffile.exists():
         raise ValueError(f"GeoTIFF file {tifffile} does not exist.")
     if not tfwfile.exists():
         raise ValueError(f"TFW file {tfwfile} does not exist.")
-    if not cachedir.exists():
-        cachedir.mkdir(exist_ok=True)
 
-    # Create cache key based on file paths and parameters
+    # Key the cache on when the files last changed too, so edited data isn't served stale
     cache_key = md5(
-        f"{tfwfile}_{tifffile}_{points}_{downsample_factor}".encode()
+        f"{tfwfile}_{tfwfile.stat().st_mtime_ns}_"
+        f"{tifffile}_{tifffile.stat().st_mtime_ns}_{points}".encode()
     ).hexdigest()
     cache_file = cachedir / f"mesh_{cache_key}.pkl"
 
-    # Try to load from cache
     if use_cache and cache_file.exists():
-        print("USING CACHE")
         try:
             with open(cache_file, "rb") as f:
-                meshes = pickle.load(f)
+                cached: NDArray[np.float32] = pickle.load(f)
+            print("USING CACHE")
+            return cached
         except Exception:
-            # If cache loading fails, regenerate
-            meshes = None
-    else:
-        meshes = None
+            pass  # Unreadable cache: rebuild the mesh and overwrite it below
 
-    # Generate mesh if not cached
-    if meshes is None:
-        with open(tfwfile, "r") as tfw:
-            with rio_open(tifffile) as tif:
-                # Optional downsampling for very large datasets
-                if downsample_factor > 1:
-                    # Read at reduced resolution
-                    height = tif.height // downsample_factor
-                    width = tif.width // downsample_factor
-                    raster_data = tif.read(
-                        1,
-                        out_shape=(height, width),
-                        resampling=1,  # Nearest neighbor for speed
-                    )
-                    # Update geotiff reader dimensions temporarily
-                    original_height, original_width = tif.height, tif.width
-                    tif._height, tif._width = height, width
+    with open(tfwfile, "r") as tfw:
+        with rio_open(tifffile) as tif:
+            xyz = tfw_to_xyz(tfw, tif)
+            print(f"Extracted {len(xyz)} XYZ points from GeoTIFF.")
+    meshes = meshify(
+        xyz,
+        points=points,
+        scalar=float32(1.0),
+        interpolation="nearest",
+        smooth_sigma=float32(1.0),
+    )
 
-                xyz = tfw_to_xyz(tfw, tif)
-                print(f"Extracted {len(xyz)} XYZ points from GeoTIFF.")
-                # Restore original dimensions
-                if downsample_factor > 1:
-                    tif._height, tif._width = original_height, original_width
+    # Save to cache
+    if use_cache:
+        try:
+            cachedir.mkdir(parents=True, exist_ok=True)
+            with open(cache_file, "wb") as f:
+                pickle.dump(meshes, f)
+        except Exception as e:
+            print(f"Warning: Could not save to cache: {e}")
 
-        meshes = meshify(
-            xyz,
+    return meshes
+
+
+def graph_plotly(
+    tfwfile: Path | None = None,
+    tifffile: Path | None = None,
+    figure: Optional[Figure] = None,
+    meshes: NDArray[np.float32] | None = None,
+    cachedir: Path = Path(__file__).parent / "__cache__",
+    points: uint16 = uint16(200),
+    cmapstr: ColorScale = "viridis",
+    use_cache: bool = True,
+    x_offset: float32 = float32(0.0),
+    y_offset: float32 = float32(0.0),
+    z_offset: float32 = float32(0.0),
+    opacity: float32 = float32(0.85),
+) -> Figure:
+
+    if meshes is None and (tfwfile is None or tifffile is None):
+        raise ValueError("Either meshes or both tfwfile and tifffile must be provided.")
+
+    meshes = (
+        meshes
+        if meshes is not None
+        else tif_to_mesh(
+            tfwfile=tfwfile,
+            tifffile=tifffile,
+            cachedir=cachedir,
             points=points,
-            scalar=float32(1.0),
-            interpolation="nearest",
-            smooth_sigma=float32(1.0),
+            use_cache=use_cache,
         )
-
-        # Save to cache
-        if use_cache:
-            try:
-                with open(cache_file, "wb") as f:
-                    pickle.dump(meshes, f)
-            except Exception as e:
-                print(f"Warning: Could not save to cache: {e}")
-
-    fig = Figure()
-    fig = plotly_surface(meshes, title="Topography Mesh", cmapstr="viridis", fig=fig)
-    return fig
+    )
+    return plotly_surface(
+        meshes,
+        title="Topography Mesh",
+        cmapstr=cmapstr,
+        fig=figure,
+        x_offset=x_offset,
+        y_offset=y_offset,
+        z_offset=z_offset,
+        opacity=opacity,
+    )

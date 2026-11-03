@@ -1,43 +1,45 @@
 from __future__ import annotations
-from nptyping import NDArray, Shape, UInt8, UInt16, Float32, Float64, Void, Bool
-from numpy import (
-    uint8,
-    uint16,
-    float32,
-    float64,
-    empty,
-    unique,
-    array,
-    ascontiguousarray,
-    zeros as npzeros,
-    dtype as npdtype,
-    copy as npcopy,
-)
-
-from numpy.random import choice
-from numba import njit, types as nbtypes  # type: ignore[import-untyped]
-from typing_extensions import Self
-from dataclasses import dataclass
-from typing import Annotated, Final, Optional, Any
-import cv2
-
-from .configuration import Camera, LOGGER
-from logging import getLogger
-from .extraction import (
-    ColourTag,
-    ColorImage,
-    BitMapImage,
-    GrayScaleImage,
-    ChannelData,
-    get_datasets_vstack,
-    frequency_distribution,
-    get_masks_vstacks_sparse,
-    get_reference_vstacks_sparse,
-)
 
 from concurrent.futures import (
-    as_completed,
     ThreadPoolExecutor,  # Changed from ProcessPoolExecutor
+    as_completed,
+)
+from dataclasses import dataclass
+from logging import getLogger
+from typing import Annotated, Any, Final, Optional
+
+import cv2
+import numpy as np
+from numba import njit  # type: ignore[import-untyped]
+from numba import types as nbtypes
+from numpy import (
+    array,
+    empty,
+    float32,
+    uint8,
+    uint16,
+    unique,
+)
+from numpy import (
+    dtype as npdtype,
+)
+from numpy import (
+    zeros as npzeros,
+)
+from numpy.random import choice
+from numpy.typing import NDArray
+from typing_extensions import Self
+
+from .configuration import LOGGER, Camera
+from .extraction import (
+    ChannelData,
+    ColorImage,
+    ColourTag,
+    GrayScaleImage,
+    frequency_distribution,
+    get_datasets_vstack,
+    get_masks_vstacks_sparse,
+    get_reference_vstacks_sparse,
 )
 
 numbassalog = getLogger("numba.core.ssa")
@@ -58,12 +60,12 @@ A list of tuple boundaries for thresholding. The first item is the lower boundar
 """
 
 type BitMapArray = Annotated[
-    NDArray[Shape["*, *, *"], Bool],
+    NDArray[np.bool_],
     "Represents a 3D array of boolean values (H, W, C)",
 ]
 
 type ColorImageArray = Annotated[
-    NDArray[Shape["*, *, 3"], UInt8],
+    NDArray[np.uint8],
     "Represents a 3D array of color images (H, W, 3) with uint8 values",
 ]
 
@@ -254,7 +256,7 @@ def _batch_compute_confusion_matrix(
     mask_shape: tuple[int, int],
     ground_truth_masks: cv2.UMat,
     boundary_masks: cv2.UMat,
-) -> NDArray[Shape["*, 5"], Float32]:
+) -> NDArray[np.float32]:
 
     boundary_count = len(upper_bounds)
     mask_height, mask_width = mask_shape
@@ -276,7 +278,7 @@ def _batch_compute_confusion_matrix(
     tpmask, fnmask, fpmask, tnmask = _compute_confusion_matrix_masks(
         repeated_ground_truth_masks, boundary_masks
     )
-    LOGGER.debug(f"_batch_compute_confusion_matrix :: Confusion matrix masks computed")
+    LOGGER.debug("_batch_compute_confusion_matrix :: Confusion matrix masks computed")
 
     for i in range(boundary_count):
         startrow = i * mask_height
@@ -310,16 +312,16 @@ def _batch_compute_confusion_matrix(
             precision,
             accuracy,
         )
-        LOGGER.debug(f"=============================================")
+        LOGGER.debug("=============================================")
 
     return results
 
 
 def bootstrap_indexes(
-    indexes: NDArray[Shape["*"], UInt16],
+    indexes: NDArray[np.uint16],
     stratum_size: Optional[uint16] = None,
     strata_count: uint16 = uint16(100),
-) -> NDArray[Shape["*, *"], UInt16]:
+) -> NDArray[np.uint16]:
     """
     Split the dataset indexes into testing strata using bootstrapping.
     Args:
@@ -349,7 +351,7 @@ def analyze_channel_jaccard(
     ctag: ColourTag,
     skyset: Optional[ColorImage] = None,
     cloudset: Optional[ColorImage] = None,
-) -> NDArray[Shape["*, 3"], Void]:
+) -> NDArray[np.void]:
     """
     Analyze the Jaccard similarity between the cloud and sky datasets for a specific color channel.
 
@@ -435,7 +437,7 @@ class ROCAnalyzer:
 
     def _run_similarity_analysis(
         self, camera: Camera, ctags: list[ColourTag]
-    ) -> NDArray[Shape["*, 3"], Void]:
+    ) -> NDArray[np.void]:
         """
         Run similarity analysis for the given color tags.
         Args:
@@ -462,7 +464,6 @@ class ROCAnalyzer:
         cloudset, skyset = get_datasets_vstack(camera)
 
         with ThreadPoolExecutor(max_workers=int(workers)) as executor:
-
             # Submit tasks for each color tag - Futures are hashable so we can map them to their color tag and retrieve as_completed
             LOGGER.debug(
                 f"Starting analysis for {len(clist)} color tags with {workers} workers."
@@ -490,7 +491,7 @@ class ROCAnalyzer:
         self,
         camera: Camera,
         tag: ColourTag,
-        bootstrap_samples: NDArray[Shape["*, *"], UInt16],
+        bootstrap_samples: NDArray[np.uint16],
     ) -> tuple[tuple[int, int], GrayScaleImage, ColorImage]:
         """
         Load a batch of ground truth masks and reference images for the specified color tag.
@@ -498,7 +499,7 @@ class ROCAnalyzer:
         Args:
             camera (Camera): Camera instance to use for analysis.
             tag (ColourTag): Color tag to analyze.
-            bootstrap_samples (NDArray[Shape["*, *"], UInt16]): Indices of the samples to use for bootstrapping.
+            bootstrap_samples (NDArray[np.uint16]): Indices of the samples to use for bootstrapping.
         Returns:
             tuple[tuple[int, int]], BitMapImage, ColorImage]: A tuple containing the composite ground truth masks, reference images, and shape (height, width).
         """
@@ -538,7 +539,7 @@ class ROCAnalyzer:
         index: uint8,
         camera: Camera,
         tag: ColourTag,
-        bootstrap_samples: NDArray[Shape["*, *"], UInt16],
+        bootstrap_samples: NDArray[np.uint16],
         boundaries: tuple[uint8, list[uint8]],
     ) -> tuple[tuple[int, int], GrayScaleImage, GrayScaleImage]:
         """
@@ -571,7 +572,6 @@ class ROCAnalyzer:
         lowerbound = boundaries[0]
         coi = cv2.split(big_ref_mask)[int(index)]
         for upperbound in boundaries[1]:
-
             boundmask = cv2.inRange(  # type: ignore
                 coi,
                 int(lowerbound),
@@ -588,9 +588,9 @@ class ROCAnalyzer:
         camera: Camera,
         tag: ColourTag,
         index: uint8,
-        bootstrap_samples: NDArray[Shape["*, *"], UInt16],
+        bootstrap_samples: NDArray[np.uint16],
         boundaries: BoundaryArray,
-    ) -> NDArray[Shape["*, 6"], Float32]:
+    ) -> NDArray[np.float32]:
 
         LOGGER.debug(
             f"analayze_channel_roc :: Analyzing channel {tag.tag} index {index} for camera {camera.model.value}"
@@ -604,7 +604,6 @@ class ROCAnalyzer:
         currentrow = 0
 
         for boundarygroup in boundaries:
-
             lowerbound, upperbounds = boundarygroup
 
             dims, gtmask, boundmask = self._load_boundary_batch(
@@ -626,7 +625,7 @@ class ROCAnalyzer:
             boundumat = cv2.UMat(boundmask)  # type: ignore
 
             LOGGER.debug(
-                f"analayze_channel_roc :: Mats loaded to gpu :: Free memory :: {cv2.ocl.Device.getDefault().globalMemSize() // (1024*1024)} MB"
+                f"analayze_channel_roc :: Mats loaded to gpu :: Free memory :: {cv2.ocl.Device.getDefault().globalMemSize() // (1024 * 1024)} MB"
             )
 
             confusionresult = _batch_compute_confusion_matrix(
@@ -653,7 +652,7 @@ class ROCAnalyzer:
 
     def analyze_roc(
         self: Self, camera: Camera, colortags: list[ColourTag], overwrite: bool = False
-    ) -> dict[str, NDArray[Shape["6"], Float32]]:
+    ) -> dict[str, NDArray[np.float32]]:
 
         LOGGER.info(f"Starting ROC analysis for camera {camera.model.value}")
 
