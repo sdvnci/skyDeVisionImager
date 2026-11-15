@@ -1,195 +1,182 @@
-from sqlite3 import OperationalError as SQLError
+from datetime import UTC, datetime
+from typing import Final, cast
+
+from pydantic import ValidationError
+from quart import Blueprint, Response, current_app, jsonify, request
+from werkzeug.exceptions import HTTPException
+
+from ._types import ErrorDict, ErrorResponse
+from ._utils import InvalidHeadersError, MissingHeadersError, device_headers
 from .db import (
-    str2dt,
+    AlreadyExistsError,
     CameraModel,
-    DeviceType,
-    StationStatus,
-    StationStatusJSON,
-    StatusService,
-    StationService,
+    DatabaseError,
+    InvalidInputError,
+    Manager,
+    NotFoundError,
     Reading,
-    ReadingJSON,
     ReadingService,
     Station,
-    StationJSON,
-    InternalDBError,
-    InvalidInputError,
-    NotFoundError,
-    AlreadyExistsError,
+    StationService,
+    StationStatus,
+    StatusService,
+    UnauthorizedError,
 )
+from .metar import MetarCacheLayer, UnregisteredAirportException
 
-from functools import wraps
-from pydantic import ValidationError
-from pydantic_extra_types.mac_address import MacAddress
-from typing import cast, Final
-
-from flask import Blueprint, Response, request, jsonify
-
-from datetime import datetime, UTC
-
-from ._utils import (
-    MissingHeadersError,
-    headercheck,
-    HEADERS as HEADERS,
-)
-
-from .metar._metar import MetarCacheLayer
-from ._types import ErrorResponse, ErrorDict
-
-
-METARCACHE: Final[MetarCacheLayer] = MetarCacheLayer(airports=["ESMX"])
+#: Where the app keeps its MetarCacheLayer, in ``app.extensions``.
+METAR_EXTENSION: Final = "metar"
+#: Config key for the airport whose QNH is served when none is asked for.
+QNH_AIRPORT: Final = "QNH_AIRPORT"
 
 apiRouter = Blueprint("api", __name__, url_prefix="/api")
 """
 API endpoints for handling status and environmental reading data.
 """
 
-def _create_error_response(title: str, details: str, code: str, source: str) -> Response:
-    return jsonify(ErrorResponse(
-        errors=[ErrorDict(title=title, details=details, code=code, source=source)],
-        timestamp=datetime.now(tz=UTC).isoformat()
-    ))
+# The title and HTTP status each error is reported with. Quart picks the entry
+# for the closest base class, so subclasses are matched before DatabaseError.
+_CLIENT_ERRORS: Final[dict[type[Exception], tuple[str, int]]] = {
+    MissingHeadersError: ("Missing Headers", 400),
+    InvalidHeadersError: ("Invalid Headers", 400),
+    InvalidInputError: ("Invalid Input", 400),
+    UnauthorizedError: ("Unauthorized", 401),
+    NotFoundError: ("Not Found", 404),
+    UnregisteredAirportException: ("Not Found", 404),
+    AlreadyExistsError: ("Already Exists", 409),
+    ValidationError: ("Validation Error", 422),
+}
 
-def handle_api_db_errors(source_endpoint: str):
-    """
-    Decorator to handle common API and database errors and return appropriate HTTP responses.
-    Args:
-        source_endpoint (str): The endpoint where the error originated, used for error reporting.
-    Returns:
-        Callable: The decorated function with error handling.
-    """
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except MissingHeadersError as e:
-                return _create_error_response("Missing Headers", str(e), "400", source_endpoint), 400
-            except ValidationError as e:
-                return _create_error_response("Validation Error", str(e), "422", source_endpoint), 422
-            except AlreadyExistsError as e:
-                return _create_error_response("Already Exists", str(e), "409", source_endpoint), 409
-            except NotFoundError as e:
-                return _create_error_response("Not Found", str(e), "404", source_endpoint), 404
-            except InvalidInputError as e:
-                return _create_error_response("Invalid Input", str(e), "400", source_endpoint), 400
-            except InternalDBError as e:
-                return _create_error_response("Internal Database Error", str(e), "500", source_endpoint), 500
-            except SQLError as e:
-                return _create_error_response("Database Error", str(e), "500", source_endpoint), 500
-        return wrapper
-    return decorator
+
+def _error_response(title: str, details: str, status: int) -> tuple[Response, int]:
+    return (
+        jsonify(
+            ErrorResponse(
+                errors=[
+                    ErrorDict(
+                        title=title,
+                        details=details,
+                        code=str(status),
+                        source=request.path,
+                    )
+                ],
+                timestamp=datetime.now(tz=UTC).isoformat(),
+            )
+        ),
+        status,
+    )
+
+
+async def _handle_client_error(err: Exception) -> tuple[Response, int]:
+    title, status = next(
+        entry for kind, entry in _CLIENT_ERRORS.items() if isinstance(err, kind)
+    )
+    return _error_response(title, str(err), status)
+
+
+for _kind in _CLIENT_ERRORS:
+    apiRouter.register_error_handler(_kind, _handle_client_error)
+
+
+@apiRouter.errorhandler(HTTPException)
+async def _handle_http_error(err: HTTPException) -> tuple[Response, int]:
+    """Malformed requests (bad JSON, wrong method, ...) in the API's error shape."""
+    return _error_response(err.name, err.description or err.name, err.code or 500)
+
+
+@apiRouter.errorhandler(DatabaseError)
+@apiRouter.errorhandler(ConnectionError)
+async def _handle_server_error(err: Exception) -> tuple[Response, int]:
+    """Failures on our side. The cause is logged, not sent to the client."""
+    Manager.error(f"{request.path} failed: {err}")
+    return _error_response(
+        "Internal Database Error", "The database could not serve this request.", 500
+    )
+
+
+async def _payload() -> dict[str, object]:
+    """The request's JSON body, which must be an object."""
+    body = await request.get_json()
+    if not isinstance(body, dict):
+        raise InvalidInputError("The request body must be a JSON object.")
+    return cast(dict[str, object], body)
+
+
+def _metar() -> MetarCacheLayer:
+    return cast(MetarCacheLayer, current_app.extensions[METAR_EXTENSION])
 
 
 @apiRouter.route("/status", methods=["POST", "PUT"])
-@handle_api_db_errors("/api/status")
-def status() -> tuple[Response, int]:
+async def status() -> tuple[Response, int]:
     """
     Endpoint to handle status updates.
     """
-
-    headers = request.headers
-    headercheck(headers)
-
-    statusdict: StationStatusJSON = cast(StationStatusJSON, request.get_json())
-
-    # Validation for update JSON
-    mac: str = cast(str, headers.get(HEADERS.MACADDRESS.value))
-    timestamp: str = cast(str, headers.get(HEADERS.TIMESTAMP.value))
-    statusdict.update(
-        {
-            "MAC": MacAddress(mac),
-            "timestamp": str2dt(timestamp),
-        }
+    device = device_headers(request.headers)
+    status = StationStatus.model_validate(
+        {**await _payload(), "MAC": device.mac, "timestamp": device.timestamp}
     )
-    status = StationStatus(**statusdict)
 
-    StatusService.update(MAC=mac, status=status)
+    await StatusService.update(device.mac, status)
     return jsonify({"status": "success"}), 200
 
 
 @apiRouter.route("/register", methods=["POST", "PUT"])
-@handle_api_db_errors("/api/register")
-def register() -> tuple[Response, int]:
+async def register() -> tuple[Response, int]:
     """
     Endpoint to handle station registration.
     """
-    headers = request.headers
-    headercheck(headers)
+    device = device_headers(request.headers)
 
-    # Inital check to see if the station already exists
-    mac = headers.get(HEADERS.MACADDRESS.value)
-    if StationService.exists(MAC=mac):
-        raise AlreadyExistsError(f"Station with MAC {mac} already exists.")
+    stationdict = await _payload()
+    _ = stationdict.pop("sensors", None)
+    _ = stationdict.setdefault("camera_model", CameraModel.UNKNOWN.value)
+    _ = stationdict.setdefault("firmware_version", device.firmware_version)
+    station = Station.model_validate({**stationdict, "MAC": device.mac})
 
-    stationdict: StationJSON = request.get_json()
-    stationdict.pop("sensors", None)
-    stationdict.update(
-        {
-            "MAC": MacAddress(mac),
-            "camera_model": CameraModel.match(
-                stationdict.get("camera_model", "UNKNOWN")
-            ),
-            "device_model": DeviceType.match(
-                stationdict.get("device_model", "UNKNOWN")
-            ),
-        }
-    )
-
-    station = Station(**stationdict)  # type: ignore
-
-    StationService.insert(station=station)
+    await StationService.insert(station)
     return jsonify({"status": "success"}), 200
 
 
 @apiRouter.route("/reading", methods=["POST", "PUT"])
-@handle_api_db_errors("/api/reading")
-def reading() -> tuple[Response, int]:
+async def reading() -> tuple[Response, int]:
     """
-    Endpoint to handle environmental reading updates.
+    Endpoint to handle environmental readings. The reading's time is taken
+    from the timestamp header; a station resending a reading replaces it.
     """
-
-
-    headers = request.headers
-    headercheck(headers)
-
-    readingdict: ReadingJSON = cast(ReadingJSON, request.get_json())
-
-    mac = headers.get(HEADERS.MACADDRESS.value)
-    timestamp = cast(str, headers.get(HEADERS.TIMESTAMP.value))
-    readingdict.update(
-        {
-            "MAC": MacAddress(mac),
-            "timestamp": str2dt(timestamp),
-        }
+    device = device_headers(request.headers)
+    reading = Reading.model_validate(
+        {**await _payload(), "MAC": device.mac, "timestamp": device.timestamp}
     )
 
-    reading = Reading(**readingdict)
-    ReadingService.update(MAC=mac, timestamp=timestamp, reading=reading)
+    async with Manager.cursor() as cursor:
+        if not await StationService.exists(device.mac, cursor=cursor):
+            raise NotFoundError(f"Station with MAC {device.mac} is not registered.")
+        await ReadingService.upsert(reading, cursor=cursor)
+
     return jsonify({"status": "success"}), 200
 
 
 @apiRouter.route("/qnh", methods=["GET"])
-def qnh() -> tuple[Response, int]:
+async def qnh() -> tuple[Response, int]:
     """
-    Endpoint to handle QNH updates.
+    Endpoint to get the QNH at an airport: the ``airport`` query parameter,
+    or the configured default.
     """
-
-    qnh = METARCACHE.get_qnh("ESMX")
+    airport = request.args.get("airport") or current_app.config[QNH_AIRPORT]
+    qnh = _metar().get_qnh(airport)
 
     if qnh is None:
-        return _create_error_response(
-            title="QNH Not Found",
-            details="QNH value for the requested airport is not available.",
-            code="404",
-            source="/api/qnh"
-        ), 404
-    
+        return _error_response(
+            "QNH Not Found",
+            "QNH value for the requested airport is not available.",
+            404,
+        )
+
     return jsonify({"qnh": qnh}), 200
 
 
 @apiRouter.route("/version", methods=["GET"])
-def version() -> tuple[Response, int]:
+async def version() -> tuple[Response, int]:
     """
     Endpoint to handle firmware version updates.
     """
@@ -197,7 +184,7 @@ def version() -> tuple[Response, int]:
 
 
 @apiRouter.route("/check", methods=["GET"])
-def check() -> tuple[Response, int]:
+async def check() -> tuple[Response, int]:
     """
     Endpoint to check if the API is running.
     """

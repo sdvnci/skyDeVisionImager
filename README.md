@@ -10,14 +10,14 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Validation: Pydantic v2](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pydantic/pydantic/main/docs/badge/v2.json)](https://pydantic.dev)
 
-Environmental monitoring and computer vision platform that combines terrestrial imaging analysis with geospatial data processing. Built around a Flask REST API, it provides tools for cloud detection, terrain visualization, camera calibration, and environmental data management from ESP32-based weather stations.
+Environmental monitoring and computer vision platform that combines terrestrial imaging analysis with geospatial data processing. Built around an async Quart REST API, it provides tools for cloud detection, terrain visualization, camera calibration, and environmental data management from ESP32-based weather stations.
 
 ![Image recognition thumbnail](thumbnail.png)
 
 ## Overview
 
 ### Server
-Flask-based REST API handling device registration, environmental readings, and sensor status updates from ESP32 weather stations. Includes automatic METAR data caching for QNH retrieval.
+Async Quart REST API (aiosqlite, httpx) handling device registration, environmental readings, and sensor status updates from ESP32 weather stations. Includes automatic METAR data caching for QNH retrieval.
 
 ### Image Analysis
 Multi-color-space cloud detection (RGB/HSV/YCrCb) with ROC curve analysis and Jaccard similarity metrics. Supports camera calibration and mask generation.
@@ -34,6 +34,24 @@ cd skyDeVisionImager
 pip install -r requirements.txt
 ```
 
+### Configuration
+Settings are read from the environment, or a `.env` file:
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `DBSECRET` | Secret the server signs sessions and peppers passwords with. **Required.** | - |
+| `DBFILE` | Path to the SQLite database file | `database.db` |
+| `DB_POOL_SIZE` | Most database connections open at once | `5` |
+| `DB_POOL_TIMEOUT` | Seconds to wait for a free connection, or a locked database | `10` |
+| `METAR-TAF` | metar-taf.com API key. Without it the QNH cache is never refreshed. | - |
+
+### Development
+```bash
+black --check .   # formatting
+mypy .            # strict type checking
+pytest -q         # tests
+```
+
 ## Server Components
 
 ### API Endpoints (`server/api.py`)
@@ -43,13 +61,15 @@ pip install -r requirements.txt
 - `POST /api/status` - Update sensor status (SHT, BMP, CAM, WIFI)
 
 **Data Collection**
-- `POST /api/reading` - Submit environmental reading (temperature, humidity, pressure, dewpoint)
-- `GET /api/qnh` - Retrieve current QNH from cached METAR data
+- `POST /api/reading` - Submit environmental reading (temperature, humidity, pressure, dewpoint). The reading is stamped with `X-Timestamp`; resending one replaces it.
+- `GET /api/qnh` - Retrieve current QNH from cached METAR data. `?airport=` picks one of the cached airports.
 
 **System**
 - `GET /api/check` - API health check
 
-All endpoints expect headers: `X-MAC-Address`, `X-Timestamp`, `X-Firmware-Version`
+Device endpoints (`register`, `status`, `reading`) expect headers: `X-MAC-Address`, `X-Timestamp`, `X-Firmware-Version`
+
+Errors are returned as `{"errors": [{"title", "details", "code", "source"}], "timestamp"}`.
 
 ### Database (`server/db/`)
 
@@ -66,11 +86,25 @@ All endpoints expect headers: `X-MAC-Address`, `X-Timestamp`, `X-Firmware-Versio
 - `StatusService` - Sensor status tracking
 - `UserService` - User management with password hashing
 
+Services are never instantiated; every method is a classmethod, and every one that touches
+the database is a coroutine. Each call is its own transaction unless it is handed a `cursor`,
+which is how operations across tables stay atomic:
+
+```python
+from server.db import Manager, ReadingService, StationService
+
+station = await StationService.get("AA:BB:CC:DD:EE:FF")
+
+async with Manager.cursor() as cursor:  # commits on success, rolls back on any error
+    await StationService.insert(station, cursor=cursor)
+    await ReadingService.insert(reading, cursor=cursor)
+```
+
 ### METAR Integration (`server/metar/`)
 
 **MetarCacheLayer**
-- Background thread updates QNH values every 10 minutes via metar-taf.com API
-- Thread-safe cache with persistent storage
+- Background task updates QNH values every 10 minutes via metar-taf.com API (httpx), while the app is serving
+- Cache is saved to disk so a restart serves the last known values
 - Supports multiple airport codes
 - Graceful fallback on API failures
 
@@ -96,19 +130,17 @@ All endpoints expect headers: `X-MAC-Address`, `X-Timestamp`, `X-Firmware-Versio
 
 ### Running the Server
 ```python
-from flask import Flask
-from server.api import apiRouter
-from server.db import Manager
+from server import create_app
 
-app = Flask(__name__)
-app.register_blueprint(apiRouter)
-
-# Initialize database
-Manager.connect("weather_data.db")
+# Loads the configuration. While serving, the app holds the database
+# connection pool open and keeps the QNH cache fresh.
+app = create_app(database="weather_data.db")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
 ```
+
+In production, serve it with an ASGI server, e.g. `hypercorn "app:app" --bind 0.0.0.0:5000`.
 
 ### GeoTIFF Visualization
 ```python

@@ -6,11 +6,11 @@ from concurrent.futures import (
 )
 from dataclasses import dataclass
 from logging import getLogger
-from typing import Annotated, Any, Final, Optional
+from typing import Annotated, Any, Final
 
 import cv2
 import numpy as np
-from numba import njit  # type: ignore[import-untyped]
+from numba import njit
 from numba import types as nbtypes
 from numpy import (
     array,
@@ -108,7 +108,7 @@ class AnalysisConfiguration:
     caching: bool = True
     gpu_caching: bool = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.strata_count < 1:
             raise ValueError("strata_count must be at least 1")
         if self.strata_size < 1:
@@ -120,7 +120,7 @@ class AnalysisConfiguration:
         if self.max_workers is not None and self.max_workers < 1:
             raise ValueError("max_workers must be at least 1 if specified")
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, int | float | bool]:
         """
         Convert the dataclass to a dictionary for easy serialization.
         """
@@ -236,7 +236,7 @@ def _compute_confusion_matrix(
     fn_mask: cv2.UMat,
     fp_mask: cv2.UMat,
     tn_mask: cv2.UMat,
-):
+) -> tuple[float32, float32, float32, float32]:
     tp = float32(cv2.countNonZero(tp_mask))
     fn = float32(cv2.countNonZero(fn_mask))
     fp = float32(cv2.countNonZero(fp_mask))
@@ -319,7 +319,7 @@ def _batch_compute_confusion_matrix(
 
 def bootstrap_indexes(
     indexes: NDArray[np.uint16],
-    stratum_size: Optional[uint16] = None,
+    stratum_size: uint16 | None = None,
     strata_count: uint16 = uint16(100),
 ) -> NDArray[np.uint16]:
     """
@@ -349,16 +349,16 @@ def bootstrap_indexes(
 
 def analyze_channel_jaccard(
     ctag: ColourTag,
-    skyset: Optional[ColorImage] = None,
-    cloudset: Optional[ColorImage] = None,
+    skyset: ColorImage | None = None,
+    cloudset: ColorImage | None = None,
 ) -> NDArray[np.void]:
     """
     Analyze the Jaccard similarity between the cloud and sky datasets for a specific color channel.
 
     Args:
         ctag (ColourTag): The color tag to analyze.
-        skyset (Optional[ColorImage]): The sky dataset to compare against.
-        cloudset (Optional[ColorImage]): The cloud dataset to analyze.
+        skyset (ColorImage | None): The sky dataset to compare against.
+        cloudset (ColorImage | None): The cloud dataset to analyze.
     Returns:
         NDArray[Shape["*, 3"], JaccardRecord]: Array of Jaccard similarity records for the specified color channel.
     Raises:
@@ -402,8 +402,8 @@ class ROCAnalyzer:
 
     def __init__(
         self,
-        config: Optional[AnalysisConfiguration] = None,
-        camera: Optional[Camera] = None,
+        config: AnalysisConfiguration | None = None,
+        camera: Camera | None = None,
     ):
         self.config = (
             config

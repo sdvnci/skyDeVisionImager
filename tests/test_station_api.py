@@ -1,5 +1,5 @@
 from typing import no_type_check
-from flask.testing import FlaskClient
+from quart.typing import TestClientProtocol as Client
 from server.db import (
     CameraModel,
     DeviceType,
@@ -17,7 +17,7 @@ from datetime import datetime, UTC
 
 
 @no_type_check
-def test_post_status_successful(client: FlaskClient) -> None:
+async def test_post_status_successful(client: Client) -> None:
 
     # First we ensure the station actually exists.
     station = Station(
@@ -39,11 +39,11 @@ def test_post_status_successful(client: FlaskClient) -> None:
         ),
     )
 
-    StationService.insert(station=station)
+    await StationService.insert(station=station)
 
     # No error during insertion means we're good.
 
-    response = client.post(
+    response = await client.post(
         "/api/status",
         json=station.sensors.model_dump(mode="json"),
         headers={
@@ -55,19 +55,19 @@ def test_post_status_successful(client: FlaskClient) -> None:
 
     assert (
         response.status_code == 200
-    ), f"Operation failed: {response.status_code} :: {response.get_json()}"
-    data = response.get_json()
+    ), f"Operation failed: {response.status_code} :: {(await response.get_json())}"
+    data = await response.get_json()
     assert data.get("status", None), "status not returned in message"
 
 
 @no_type_check
-def test_post_status_missing_headers(client: FlaskClient) -> None:
-    response = client.post("/api/status", json={}, headers={})
+async def test_post_status_missing_headers(client: Client) -> None:
+    response = await client.post("/api/status", json={}, headers={})
 
     assert (
         response.status_code == 400
     ), f"Expected 400 for Missing Headers, got {response.status_code}"
-    data = response.get_json()
+    data = await response.get_json()
     assert "errors" in data, f"Expected errors from missing headers, got {data}"
     errors = data["errors"]
     assert (
@@ -80,8 +80,8 @@ def test_post_status_missing_headers(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_post_status_validation_error(client: FlaskClient) -> None:
-    response = client.post(
+async def test_post_status_validation_error(client: Client) -> None:
+    response = await client.post(
         "/api/status",
         json={"SHT": "not_a_bool"},
         headers={
@@ -93,8 +93,8 @@ def test_post_status_validation_error(client: FlaskClient) -> None:
 
     assert (
         response.status_code == 422
-    ), f"Expected 422 for Validation Error, got {response.status_code} :: {response.get_json()}"
-    data = response.get_json()
+    ), f"Expected 422 for Validation Error, got {response.status_code} :: {(await response.get_json())}"
+    data = await response.get_json()
     assert "errors" in data, f"Expected errors from validation error, got {data}"
     errors = data["errors"]
     assert (
@@ -107,8 +107,8 @@ def test_post_status_validation_error(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_post_status_notfound_error(client: FlaskClient) -> None:
-    response = client.post(
+async def test_post_status_notfound_error(client: Client) -> None:
+    response = await client.post(
         "/api/status",
         json={
             "SHT": False,
@@ -125,8 +125,8 @@ def test_post_status_notfound_error(client: FlaskClient) -> None:
 
     assert (
         response.status_code == 404
-    ), f"Expected 404 for Not Found Error, got {response.status_code} :: {response.get_json()}"
-    data = response.get_json()
+    ), f"Expected 404 for Not Found Error, got {response.status_code} :: {(await response.get_json())}"
+    data = await response.get_json()
     assert "errors" in data, f"Expected errors from not found error, got {data}"
     errors = data["errors"]
     assert (
@@ -139,8 +139,8 @@ def test_post_status_notfound_error(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_register_station_successful(client: FlaskClient) -> None:
-    response = client.post(
+async def test_register_station_successful(client: Client) -> None:
+    response = await client.post(
         "/api/register",
         json={
             "name": "station",
@@ -160,14 +160,14 @@ def test_register_station_successful(client: FlaskClient) -> None:
 
     assert (
         response.status_code == 200
-    ), f"Operation failed: {response.status_code} :: {response.get_json()}"
-    data = response.get_json()
+    ), f"Operation failed: {response.status_code} :: {(await response.get_json())}"
+    data = await response.get_json()
     assert data.get("status", None), "status not returned in message"
     assert data["status"] == "success", f"Expected success status, got {data['status']}"
 
 
 @no_type_check
-def test_register_station_already_exists(client: FlaskClient) -> None:
+async def test_register_station_already_exists(client: Client) -> None:
     # First we ensure the station actually exists.
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
@@ -188,11 +188,11 @@ def test_register_station_already_exists(client: FlaskClient) -> None:
         ),
     )
 
-    StationService.insert(station=station)
+    await StationService.insert(station=station)
 
     # No error during insertion means we're good.
 
-    response = client.post(
+    response = await client.post(
         "/api/register",
         json={
             "name": "station",
@@ -212,8 +212,8 @@ def test_register_station_already_exists(client: FlaskClient) -> None:
 
     assert (
         response.status_code == 409
-    ), f"Expected 409 for Already Exists, got {response.status_code} :: {response.get_json()}"
-    data = response.get_json()
+    ), f"Expected 409 for Already Exists, got {response.status_code} :: {(await response.get_json())}"
+    data = await response.get_json()
     assert "errors" in data, f"Expected errors from already exists, got {data}"
     errors = data["errors"]
     assert (
@@ -226,13 +226,13 @@ def test_register_station_already_exists(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_register_station_missing_headers(client: FlaskClient) -> None:
-    response = client.post("/api/register", json={}, headers={})
+async def test_register_station_missing_headers(client: Client) -> None:
+    response = await client.post("/api/register", json={}, headers={})
 
     assert (
         response.status_code == 400
     ), f"Expected 400 for Missing Headers, got {response.status_code}"
-    data = response.get_json()
+    data = await response.get_json()
     assert "errors" in data, f"Expected errors from missing headers, got {data}"
     errors = data["errors"]
     assert (
@@ -245,8 +245,8 @@ def test_register_station_missing_headers(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_register_station_validation_error(client: FlaskClient) -> None:
-    response = client.post(
+async def test_register_station_validation_error(client: Client) -> None:
+    response = await client.post(
         "/api/register",
         json={
             "name": "station",
@@ -266,8 +266,8 @@ def test_register_station_validation_error(client: FlaskClient) -> None:
 
     assert (
         response.status_code == 422
-    ), f"Expected 422 for Validation Error, got {response.status_code} :: {response.get_json()}"
-    data = response.get_json()
+    ), f"Expected 422 for Validation Error, got {response.status_code} :: {(await response.get_json())}"
+    data = await response.get_json()
     assert "errors" in data, f"Expected errors from validation error, got {data}"
     errors = data["errors"]
     assert (

@@ -1,14 +1,16 @@
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
+from pathlib import Path
+
 import pytest
-import tempfile
-import os
-from server import create_app, Manager
-from flask import Flask, testing
+from quart import Quart
+from quart.typing import TestClientProtocol as Client
+
+from server import Manager, create_app
 
 
 @pytest.fixture(autouse=True)
-def mock_app() -> Generator[Flask, None, None]:
-    app: Flask = create_app()
+def mock_app() -> Generator[Quart, None, None]:
+    app: Quart = create_app(refresh_metar=False)
     app.config.update(
         {
             "TESTING": True,
@@ -18,17 +20,10 @@ def mock_app() -> Generator[Flask, None, None]:
 
 
 @pytest.fixture()
-def client(mock_app: Flask) -> Generator[testing.FlaskClient, None, None]:
-    # Create a temporary database file that gets deleted after the test
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as temp_db:
-        temp_db_path = temp_db.name
-
-        # Close the file so SQLite can open it
-        temp_db.close()
-
-        try:
-            Manager.connect(temp_db_path, uri=False)
-            yield mock_app.test_client()
-        finally:
-            if os.path.exists(temp_db_path):
-                os.unlink(temp_db_path)
+async def client(mock_app: Quart, tmp_path: Path) -> AsyncGenerator[Client, None]:
+    # A fresh database file per test, removed with pytest's temporary directory
+    try:
+        await Manager.connect(tmp_path / "test.db")
+        yield mock_app.test_client()
+    finally:
+        await Manager.close()

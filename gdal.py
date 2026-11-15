@@ -5,6 +5,7 @@ solid clouds scattered above it. Writes the interactive plot to topo.html.
 
 import time
 from json import dumps
+from logging import INFO, basicConfig
 from pathlib import Path
 from typing import NamedTuple
 
@@ -49,6 +50,8 @@ CLOUD_SEED = 7  # change for a different sky
 
 Z_SCALE = 0.35  # scene height per unit of z
 WRITE_GEOJSON = False  # also export the terrain mesh as GeoJSON
+
+basicConfig(level=INFO, format="%(name)s - %(levelname)s - %(message)s")
 
 start_time = time.time()
 

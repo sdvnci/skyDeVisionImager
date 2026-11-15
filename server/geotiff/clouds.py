@@ -83,7 +83,8 @@ MIN_CLOUD_SHRINK = 0.5
 
 def normalize(values: NDArray[np.float64]) -> NDArray[np.float64]:
     """Rescale `values` to span 0..1."""
-    return (values - values.min()) / (values.max() - values.min())
+    span: NDArray[np.float64] = (values - values.min()) / (values.max() - values.min())
+    return span
 
 
 def fractal_noise(
@@ -389,7 +390,8 @@ class Cloud:
         )
         # The body stands at least BODY_HEIGHT across the whole base, so the sides
         # are shaped by their rounding, not by where the noise thins out at the edge
-        return maximum(heights, BODY_HEIGHT * self.height)
+        body: NDArray[np.float64] = maximum(heights, BODY_HEIGHT * self.height)
+        return body
 
     def traces(
         self,
