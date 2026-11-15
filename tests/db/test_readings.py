@@ -1,6 +1,6 @@
 from datetime import datetime, UTC, timedelta
 from typing import no_type_check
-from flask.testing import FlaskClient
+from quart.typing import TestClientProtocol as Client
 from server.db import (
     CameraModel,
     DeviceType,
@@ -13,15 +13,15 @@ from server.db import (
 
 
 @no_type_check
-def test_get_reading_not_found(client: FlaskClient) -> None:
-    result = ReadingService.get(MAC="00:1A:2B:3C:4D:5E", timestamp=datetime.now())
+async def test_get_reading_not_found(client: Client) -> None:
+    result = await ReadingService.get(MAC="00:1A:2B:3C:4D:5E", timestamp=datetime.now())
     assert (
         result is None
     ), f"MAC address is not registered, should be None but got {result}"
 
 
 @no_type_check
-def test_insert_and_get_reading(client: FlaskClient) -> None:
+async def test_insert_and_get_reading(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -33,8 +33,8 @@ def test_insert_and_get_reading(client: FlaskClient) -> None:
         longitude=82.5546,
         sensors=None,
     )
-    StationService.insert(station=station)
-    newstation = StationService.get(MAC=station.MAC)
+    await StationService.insert(station=station)
+    newstation = await StationService.get(MAC=station.MAC)
     assert newstation is not None, "Could not retrieve newly inserted station"
     assert newstation == station
 
@@ -47,9 +47,9 @@ def test_insert_and_get_reading(client: FlaskClient) -> None:
         pressure=0.0,
         dewpoint=0.0,
     )
-    ReadingService.insert(reading=reading)
+    await ReadingService.insert(reading=reading)
 
-    newreading = ReadingService.get(MAC=reading.MAC, timestamp=reading.timestamp)
+    newreading = await ReadingService.get(MAC=reading.MAC, timestamp=reading.timestamp)
 
     assert newreading is not None, "Could not retrieve inserted reading."
     assert isinstance(
@@ -60,7 +60,7 @@ def test_insert_and_get_reading(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_list_readings(client: FlaskClient) -> None:
+async def test_list_readings(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -72,8 +72,8 @@ def test_list_readings(client: FlaskClient) -> None:
         longitude=82.5546,
         sensors=None,
     )
-    StationService.insert(station=station)
-    newstation = StationService.get(MAC=station.MAC)
+    await StationService.insert(station=station)
+    newstation = await StationService.get(MAC=station.MAC)
     assert newstation is not None, "Could not retrieve newly inserted station"
     assert newstation == station
 
@@ -86,9 +86,9 @@ def test_list_readings(client: FlaskClient) -> None:
         pressure=0.0,
         dewpoint=0.0,
     )
-    ReadingService.insert(reading=reading)
+    await ReadingService.insert(reading=reading)
 
-    readings = ReadingService.list(MAC=station.MAC)
+    readings = await ReadingService.list(MAC=station.MAC)
     assert isinstance(
         readings, list
     ), f"Expected readings to be list, got {type(readings)}"
@@ -97,7 +97,7 @@ def test_list_readings(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_list_readings_startdate(client: FlaskClient) -> None:
+async def test_list_readings_startdate(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -109,8 +109,8 @@ def test_list_readings_startdate(client: FlaskClient) -> None:
         longitude=82.5546,
         sensors=None,
     )
-    StationService.insert(station=station)
-    newstation = StationService.get(MAC=station.MAC)
+    await StationService.insert(station=station)
+    newstation = await StationService.get(MAC=station.MAC)
     assert newstation is not None, "Could not retrieve newly inserted station"
     assert newstation == station
 
@@ -136,10 +136,10 @@ def test_list_readings_startdate(client: FlaskClient) -> None:
         dewpoint=0.1,
     )
 
-    ReadingService.insert(reading=readinginvalid)
-    ReadingService.insert(reading=readingvalid)
+    await ReadingService.insert(reading=readinginvalid)
+    await ReadingService.insert(reading=readingvalid)
 
-    readings = ReadingService.list(MAC=station.MAC, start=startdatetime)
+    readings = await ReadingService.list(MAC=station.MAC, start=startdatetime)
     assert isinstance(
         readings, list
     ), f"Expected readings to be list, got {type(readings)}"
@@ -150,7 +150,7 @@ def test_list_readings_startdate(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_list_readings_enddate(client: FlaskClient) -> None:
+async def test_list_readings_enddate(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -162,8 +162,8 @@ def test_list_readings_enddate(client: FlaskClient) -> None:
         longitude=82.5546,
         sensors=None,
     )
-    StationService.insert(station=station)
-    newstation = StationService.get(MAC=station.MAC)
+    await StationService.insert(station=station)
+    newstation = await StationService.get(MAC=station.MAC)
     assert newstation is not None, "Could not retrieve newly inserted station"
     assert newstation == station
 
@@ -189,10 +189,10 @@ def test_list_readings_enddate(client: FlaskClient) -> None:
         dewpoint=0.1,
     )
 
-    ReadingService.insert(reading=readinginvalid)
-    ReadingService.insert(reading=readingvalid)
+    await ReadingService.insert(reading=readinginvalid)
+    await ReadingService.insert(reading=readingvalid)
 
-    readings = ReadingService.list(MAC=station.MAC, end=enddatetime)
+    readings = await ReadingService.list(MAC=station.MAC, end=enddatetime)
     assert isinstance(
         readings, list
     ), f"Expected readings to be list, got {type(readings)}"
@@ -203,7 +203,7 @@ def test_list_readings_enddate(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_list_readings_startdate_and_enddate(client: FlaskClient) -> None:
+async def test_list_readings_startdate_and_enddate(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -215,8 +215,8 @@ def test_list_readings_startdate_and_enddate(client: FlaskClient) -> None:
         longitude=82.5546,
         sensors=None,
     )
-    StationService.insert(station=station)
-    newstation = StationService.get(MAC=station.MAC)
+    await StationService.insert(station=station)
+    newstation = await StationService.get(MAC=station.MAC)
     assert newstation is not None, "Could not retrieve newly inserted station"
     assert newstation == station
 
@@ -243,10 +243,10 @@ def test_list_readings_startdate_and_enddate(client: FlaskClient) -> None:
         dewpoint=0.1,
     )
 
-    ReadingService.insert(reading=readinginvalid)
-    ReadingService.insert(reading=readingvalid)
+    await ReadingService.insert(reading=readinginvalid)
+    await ReadingService.insert(reading=readingvalid)
 
-    readings = ReadingService.list(
+    readings = await ReadingService.list(
         MAC=station.MAC, start=startdatetime, end=enddatetime
     )
     assert isinstance(
@@ -259,7 +259,7 @@ def test_list_readings_startdate_and_enddate(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_list_readings_multiple(client: FlaskClient) -> None:
+async def test_list_readings_multiple(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -271,8 +271,8 @@ def test_list_readings_multiple(client: FlaskClient) -> None:
         longitude=82.5546,
         sensors=None,
     )
-    StationService.insert(station=station)
-    newstation = StationService.get(MAC=station.MAC)
+    await StationService.insert(station=station)
+    newstation = await StationService.get(MAC=station.MAC)
     assert newstation is not None, "Could not retrieve newly inserted station"
     assert newstation == station
 
@@ -290,9 +290,9 @@ def test_list_readings_multiple(client: FlaskClient) -> None:
     ]
 
     for reading in readings:
-        ReadingService.insert(reading=reading)
+        await ReadingService.insert(reading=reading)
 
-    newreadings = ReadingService.list(MAC=station.MAC)
+    newreadings = await ReadingService.list(MAC=station.MAC)
     newreadings.sort(key=lambda r: r.timestamp)
 
     assert isinstance(
@@ -306,7 +306,7 @@ def test_list_readings_multiple(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_update_readings_successful(client: FlaskClient) -> None:
+async def test_update_readings_successful(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -318,8 +318,8 @@ def test_update_readings_successful(client: FlaskClient) -> None:
         longitude=82.5546,
         sensors=None,
     )
-    StationService.insert(station=station)
-    newstation = StationService.get(MAC=station.MAC)
+    await StationService.insert(station=station)
+    newstation = await StationService.get(MAC=station.MAC)
     assert newstation is not None, "Could not retrieve newly inserted station"
     assert newstation == station
 
@@ -332,14 +332,14 @@ def test_update_readings_successful(client: FlaskClient) -> None:
         pressure=0.0,
         dewpoint=0.0,
     )
-    ReadingService.insert(reading=reading)
+    await ReadingService.insert(reading=reading)
 
     updates = {"temperature": 0.5, "humidity": 0.5, "pressure": 0.5, "dewpoint": 0.5}
     updatedreading = reading.model_copy(update=updates, deep=True)
 
-    ReadingService.update(MAC=station.MAC, timestamp=dt, reading=updatedreading)
+    await ReadingService.update(MAC=station.MAC, timestamp=dt, reading=updatedreading)
 
-    fetchedreading = ReadingService.get(MAC=station.MAC, timestamp=dt)
+    fetchedreading = await ReadingService.get(MAC=station.MAC, timestamp=dt)
     if fetchedreading is None:
         raise NotFoundError("Updated reading could not be found.")
     assert isinstance(
@@ -352,7 +352,7 @@ def test_update_readings_successful(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_update_readings_nonexistent(client: FlaskClient) -> None:
+async def test_update_readings_nonexistent(client: Client) -> None:
     reading = Reading(
         MAC="00:1A:2B:3C:4D:5E",
         timestamp=datetime.now(tz=UTC),
@@ -363,7 +363,7 @@ def test_update_readings_nonexistent(client: FlaskClient) -> None:
     )
 
     try:
-        ReadingService.update(
+        await ReadingService.update(
             MAC=reading.MAC, timestamp=reading.timestamp, reading=reading
         )
         raise AssertionError(
@@ -374,7 +374,7 @@ def test_update_readings_nonexistent(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_delete_reading_successful(client: FlaskClient) -> None:
+async def test_delete_reading_successful(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -386,8 +386,8 @@ def test_delete_reading_successful(client: FlaskClient) -> None:
         longitude=82.5546,
         sensors=None,
     )
-    StationService.insert(station=station)
-    newstation = StationService.get(MAC=station.MAC)
+    await StationService.insert(station=station)
+    newstation = await StationService.get(MAC=station.MAC)
     assert newstation is not None, "Could not retrieve newly inserted station"
     assert newstation == station
 
@@ -400,9 +400,9 @@ def test_delete_reading_successful(client: FlaskClient) -> None:
         pressure=0.0,
         dewpoint=0.0,
     )
-    ReadingService.insert(reading=reading)
+    await ReadingService.insert(reading=reading)
 
-    fetchedreading = ReadingService.get(MAC=station.MAC, timestamp=dt)
+    fetchedreading = await ReadingService.get(MAC=station.MAC, timestamp=dt)
     if fetchedreading is None:
         raise NotFoundError("Inserted reading could not be found.")
     assert isinstance(
@@ -411,17 +411,19 @@ def test_delete_reading_successful(client: FlaskClient) -> None:
 
     assert fetchedreading == reading, "Inserted reading is not equivalent to extracted"
 
-    ReadingService.delete(MAC=station.MAC, timestamp=dt)
-    deletedreading = ReadingService.get(MAC=station.MAC, timestamp=dt)
+    await ReadingService.delete(MAC=station.MAC, timestamp=dt)
+    deletedreading = await ReadingService.get(MAC=station.MAC, timestamp=dt)
     assert (
         deletedreading is None
     ), f"Deleted reading should be None, got {deletedreading}"
 
 
 @no_type_check
-def test_delete_reading_nonexistent(client: FlaskClient) -> None:
+async def test_delete_reading_nonexistent(client: Client) -> None:
     try:
-        ReadingService.delete(MAC="00:1A:2B:3C:4D:5E", timestamp=datetime.now(tz=UTC))
+        await ReadingService.delete(
+            MAC="00:1A:2B:3C:4D:5E", timestamp=datetime.now(tz=UTC)
+        )
         raise AssertionError(
             "Deleting a non-existent reading should raise NotFoundError"
         )
@@ -430,7 +432,7 @@ def test_delete_reading_nonexistent(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_exist_reading_successful(client: FlaskClient) -> None:
+async def test_exist_reading_successful(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -442,8 +444,8 @@ def test_exist_reading_successful(client: FlaskClient) -> None:
         longitude=82.5546,
         sensors=None,
     )
-    StationService.insert(station=station)
-    newstation = StationService.get(MAC=station.MAC)
+    await StationService.insert(station=station)
+    newstation = await StationService.get(MAC=station.MAC)
     assert newstation is not None, "Could not retrieve newly inserted station"
     assert newstation == station
 
@@ -456,15 +458,15 @@ def test_exist_reading_successful(client: FlaskClient) -> None:
         pressure=0.0,
         dewpoint=0.0,
     )
-    ReadingService.insert(reading=reading)
+    await ReadingService.insert(reading=reading)
 
-    exists = ReadingService.exists(MAC=station.MAC, timestamp=dt)
+    exists = await ReadingService.exists(MAC=station.MAC, timestamp=dt)
     assert exists is True, f"Reading should exist, got {exists}"
 
 
 @no_type_check
-def test_exists_reading_nonexistent(client: FlaskClient) -> None:
-    exists = ReadingService.exists(
+async def test_exists_reading_nonexistent(client: Client) -> None:
+    exists = await ReadingService.exists(
         MAC="00:1A:2B:3C:4D:5E", timestamp=datetime.now(tz=UTC)
     )
     assert exists is False, f"Reading should not exist, got {exists}"

@@ -1,6 +1,7 @@
+aiosqlite
 bcrypt
 email-validator
-Flask
+httpx
 numba
 numpy
 opencv-python
@@ -8,12 +9,12 @@ plotly
 pydantic
 pydantic-extra-types
 python-dotenv
+quart
 rasterio
-requests
 scipy
 
 # development
 black
 mypy
 pytest
-types-requests
+pytest-asyncio

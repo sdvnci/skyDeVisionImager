@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "skydevisionimager"
 version = "1.0.0"
-description = "Environmental monitoring and computer vision platform: a Flask API for ESP32 weather stations, cloud detection and geospatial terrain processing."
+description = "Environmental monitoring and computer vision platform: an async Quart API for ESP32 weather stations, cloud detection and geospatial terrain processing."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 authors = [
     { name = "Tadj Cazaubon" },
 ]
-keywords = ["flask", "api", "sqlite", "opencv", "geotiff", "metar", "weather", "esp32"]
+keywords = ["quart", "async", "asyncio", "aiosqlite", "httpx", "api", "sqlite", "opencv", "geotiff", "metar", "weather", "esp32"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -21,13 +21,14 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Framework :: Flask",
+    "Framework :: AsyncIO",
     "Typing :: Typed",
 ]
 dependencies = [
+    "aiosqlite",
     "bcrypt",
     "email-validator",
-    "Flask",
+    "httpx",
     "numba",
     "numpy",
     "opencv-python",
@@ -35,17 +36,17 @@ dependencies = [
     "pydantic",
     "pydantic-extra-types",
     "python-dotenv",
+    "quart",
     "rasterio",
-    "requests",
     "scipy",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-asyncio",
     "mypy",
     "black",
-    "types-requests",
 ]
 
 [project.urls]
@@ -70,6 +71,8 @@ include = [
 ]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 
 [tool.mypy]

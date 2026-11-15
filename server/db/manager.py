@@ -1,21 +1,21 @@
-from collections.abc import Generator
-from contextlib import contextmanager
+from asyncio import Lock, Queue, QueueEmpty, wait_for
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from hashlib import sha256
 from hmac import new as hmac_new
 from os import getenv
 from pathlib import Path
-from queue import Empty, SimpleQueue
-from sqlite3 import Connection, Cursor, Row, connect
 from sqlite3 import Error as SQLError
-from threading import Lock, RLock
+from sqlite3 import Row
 from typing import ClassVar, Final, final
 
+from aiosqlite import Connection, Cursor, connect
 from bcrypt import checkpw, gensalt, hashpw
 from dotenv import load_dotenv
 from pydantic import SecretStr
 
 from ..utilities import Loggable
-from .schema import apply_schema
+from .schema import SCHEMA
 
 DEFAULT_DBFILE: Final = Path("database.db")  # DBFILE
 DEFAULT_POOL_SIZE: Final = 5  # DB_POOL_SIZE
@@ -50,7 +50,7 @@ def _seconds_setting(name: str, given: float | None, default: float) -> float:
 
 class SQLiteConnectionPool:
     """
-    A thread-safe connection pool for SQLite database connections.
+    An async connection pool for SQLite database connections.
 
     Connections are opened as they are needed, up to ``size``. When all of
     them are in use, ``getconn`` waits up to ``timeout`` seconds for one to be
@@ -58,13 +58,15 @@ class SQLiteConnectionPool:
 
     A plain ``:memory:`` database is private to its connection, so its pool
     holds a single connection, which every caller shares in turn.
+
+    A pool belongs to the event loop it was first used on.
     """
 
     __slots__ = (
         "_closed",
         "_connections",
         "_idle",
-        "_lock",
+        "_opened",
         "database",
         "size",
         "timeout",
@@ -87,73 +89,84 @@ class SQLiteConnectionPool:
         self.size: int = 1 if database == ":memory:" else size
         self.timeout: float = timeout
         self.uri: bool = uri
-        self._idle: SimpleQueue[Connection] = SimpleQueue()
+        self._idle: Queue[Connection] = Queue()
         self._connections: list[Connection] = []
-        self._lock: Lock = Lock()
+        self._opened: int = 0  # connections open or being opened
         self._closed: bool = False
 
-    def _connect(self) -> Connection:
-        conn = connect(
+    async def _connect(self) -> Connection:
+        conn = await connect(
             database=self.database,
             timeout=self.timeout,
-            check_same_thread=False,  # Required for multi-threaded access
             uri=self.uri,
         )
-        conn.row_factory = Row
-        _ = conn.execute("PRAGMA foreign_keys = ON")
-        _ = conn.execute(f"PRAGMA busy_timeout = {int(self.timeout * 1000)}")
+        try:
+            conn.row_factory = Row
+            _ = await conn.execute("PRAGMA foreign_keys = ON")
+            _ = await conn.execute(f"PRAGMA busy_timeout = {int(self.timeout * 1000)}")
+        except BaseException:
+            await conn.close()
+            raise
         return conn
 
     @property
     def closed(self) -> bool:
         return self._closed
 
-    def getconn(self) -> Connection:
+    async def getconn(self) -> Connection:
         """Take a connection from the pool, opening one if there is room."""
+        if self._closed:
+            raise ConnectionError("The connection pool is closed.")
+
         try:
             return self._idle.get_nowait()
-        except Empty:
+        except QueueEmpty:
             pass
 
-        with self._lock:
-            if self._closed:
-                raise ConnectionError("The connection pool is closed.")
-            if len(self._connections) < self.size:
-                conn = self._connect()
-                self._connections.append(conn)
-                return conn
+        if self._opened < self.size:
+            # Claim the slot before awaiting, so concurrent callers can't
+            # open more connections than the pool has room for.
+            self._opened += 1
+            try:
+                conn = await self._connect()
+            except BaseException:
+                self._opened -= 1
+                raise
+            self._connections.append(conn)
+            return conn
 
         try:
-            return self._idle.get(timeout=self.timeout)
-        except Empty:
+            return await wait_for(self._idle.get(), timeout=self.timeout)
+        except TimeoutError:
             raise ConnectionError(
                 f"No database connection became free within {self.timeout:g}s"
             ) from None
 
-    def putconn(self, connection: Connection) -> None:
+    async def putconn(self, connection: Connection) -> None:
         """Return a connection to the pool."""
         if self._closed:
-            connection.close()
+            await connection.close()
             return
-        self._idle.put(connection)
+        self._idle.put_nowait(connection)
 
-    def closeall(self) -> None:
+    async def closeall(self) -> None:
         """Close every connection the pool has opened, in use or not."""
-        with self._lock:
-            self._closed = True
-            for conn in self._connections:
-                conn.close()
-            self._connections.clear()
+        self._closed = True
+        connections, self._connections = self._connections, []
+        self._opened = 0
+        for conn in connections:
+            await conn.close()
 
 
 @final
 class Manager(Loggable, log_name="dbmanager", debug=True):
     """
-    Management class for SQLite config and pooled connections.
+    Async management class for SQLite config and pooled connections.
+    Uses aiosqlite for async connections.
     """
 
     _pool: ClassVar[SQLiteConnectionPool | None] = None
-    _pool_lock: ClassVar[RLock] = RLock()
+    _pool_lock: ClassVar[Lock] = Lock()
     _pool_size: ClassVar[int] = DEFAULT_POOL_SIZE
     _timeout: ClassVar[float] = DEFAULT_POOL_TIMEOUT
     _dbfile: ClassVar[Path] = DEFAULT_DBFILE
@@ -277,7 +290,42 @@ class Manager(Loggable, log_name="dbmanager", debug=True):
         return cls._pool is not None and not cls._pool.closed
 
     @classmethod
-    def connect(
+    async def _connect_unsafe(
+        cls: type["Manager"], db_path: str | Path | None = None, uri: bool = False
+    ) -> SQLiteConnectionPool:
+        """Open a new pool and apply the schema, without acquiring the lock."""
+        await cls._close_pool_unsafe()
+
+        if db_path is not None:
+            cls._dbfile = Path(db_path)
+            cls._uri = uri
+
+        cls.info(f"Connecting to database: {cls._dbfile}")
+        pool = SQLiteConnectionPool(
+            database=str(cls._dbfile),
+            size=cls._pool_size,
+            timeout=cls._timeout,
+            uri=cls._uri,
+        )
+
+        try:
+            conn = await pool.getconn()
+            try:
+                for statement in SCHEMA:
+                    _ = await conn.execute(statement)
+                await conn.commit()
+            finally:
+                await pool.putconn(conn)
+        except SQLError as err:
+            cls.error(f"Error connecting to the database: {err}")
+            await pool.closeall()
+            raise
+
+        cls._pool = pool
+        return pool
+
+    @classmethod
+    async def connect(
         cls: type["Manager"], db_path: str | Path | None = None, uri: bool = False
     ) -> None:
         """
@@ -294,98 +342,80 @@ class Manager(Loggable, log_name="dbmanager", debug=True):
         if not cls.loaded():
             cls.load()
 
-        with cls._pool_lock:
-            cls._close_pool_unsafe()
-
-            if db_path is not None:
-                cls._dbfile = Path(db_path)
-                cls._uri = uri
-
-            cls.info(f"Connecting to database: {cls._dbfile}")
-            cls._pool = SQLiteConnectionPool(
-                database=str(cls._dbfile),
-                size=cls._pool_size,
-                timeout=cls._timeout,
-                uri=cls._uri,
-            )
-
-            try:
-                with cls.cursor() as cursor:
-                    apply_schema(cursor)
-            except SQLError as err:
-                cls.error(f"Error connecting to the database: {err}")
-                cls._close_pool_unsafe()
-                raise
+        async with cls._pool_lock:
+            _ = await cls._connect_unsafe(db_path, uri)
 
     @classmethod
-    def get_pool(cls: type["Manager"]) -> SQLiteConnectionPool:
+    async def get_pool(cls: type["Manager"]) -> SQLiteConnectionPool:
         """The open connection pool, connecting first if there isn't one."""
         pool = cls._pool
         if pool is not None and not pool.closed:
             return pool
 
-        with cls._pool_lock:
-            if cls._pool is None or cls._pool.closed:
-                cls.connect()
-            if cls._pool is None:
-                raise ConnectionError("Could not open the database connection pool.")
-            return cls._pool
+        if not cls.loaded():
+            cls.load()
+
+        async with cls._pool_lock:
+            if cls._pool is not None and not cls._pool.closed:
+                return cls._pool
+            return await cls._connect_unsafe()
 
     @classmethod
-    @contextmanager
-    def connection(cls: type["Manager"]) -> Generator[Connection, None, None]:
+    @asynccontextmanager
+    async def connection(cls: type["Manager"]) -> AsyncGenerator[Connection, None]:
         """
-        Context manager to acquire a connection from the pool. The transaction
-        is committed when the block exits cleanly, and rolled back if it raises.
+        Async context manager to acquire a connection from the pool. The
+        transaction is committed when the block exits cleanly, and rolled back
+        if it raises.
 
         Usage:
         ------
-            with Manager.connection() as conn:
-                conn.execute("SELECT * FROM table")
+            async with Manager.connection() as conn:
+                await conn.execute("SELECT * FROM table")
 
         Raises:
             ConnectionError: If no connection could be acquired.
         """
-        pool = cls.get_pool()
-        conn = pool.getconn()
+        pool = await cls.get_pool()
+        conn = await pool.getconn()
         try:
             yield conn
-            conn.commit()
+            await conn.commit()
         except BaseException:
-            conn.rollback()
+            await conn.rollback()
             raise
         finally:
-            pool.putconn(conn)
+            await pool.putconn(conn)
 
     @classmethod
-    @contextmanager
-    def cursor(cls: type["Manager"]) -> Generator[Cursor, None, None]:
+    @asynccontextmanager
+    async def cursor(cls: type["Manager"]) -> AsyncGenerator[Cursor, None]:
         """
-        Context manager to acquire a cursor from a pooled connection. Everything
-        executed on it is a single transaction (see ``connection``).
+        Async context manager to acquire a cursor from a pooled connection.
+        Everything executed on it is a single transaction (see ``connection``).
 
         Usage:
         ------
-            with Manager.cursor() as cursor:
-                cursor.execute("SELECT * FROM table")
-                results = cursor.fetchall()
+            async with Manager.cursor() as cursor:
+                await cursor.execute("SELECT * FROM table")
+                results = await cursor.fetchall()
         """
-        with cls.connection() as conn:
-            cursor = conn.cursor()
+        async with cls.connection() as conn:
+            cursor = await conn.cursor()
             try:
                 yield cursor
             finally:
-                cursor.close()
+                await cursor.close()
 
     @classmethod
-    def _close_pool_unsafe(cls: type["Manager"]) -> None:
+    async def _close_pool_unsafe(cls: type["Manager"]) -> None:
         """Close the pool without acquiring the lock."""
         if cls._pool is not None:
-            cls._pool.closeall()
-            cls._pool = None
+            pool, cls._pool = cls._pool, None
+            await pool.closeall()
 
     @classmethod
-    def close(cls: type["Manager"]) -> None:
+    async def close(cls: type["Manager"]) -> None:
         """Close all connections in the pool."""
-        with cls._pool_lock:
-            cls._close_pool_unsafe()
+        async with cls._pool_lock:
+            await cls._close_pool_unsafe()

@@ -1,13 +1,13 @@
+from asyncio import Event, Task, create_task, gather, wait_for
 from json import JSONDecodeError, dump, load
 from os import getenv
 from pathlib import Path
-from threading import Event, Lock, Thread
 from time import time
 from typing import Final, cast
 
 from dotenv import load_dotenv
+from httpx import AsyncBaseTransport, AsyncClient, HTTPError
 from pydantic import SecretStr
-from requests import RequestException, get
 
 from ..utilities import Loggable
 from ._types import MetarResponse, UnregisteredAirportException
@@ -26,10 +26,11 @@ DEFAULT_CACHE_PATH: Final = (
 class MetarCacheLayer(Loggable, log_name="metar", debug=True):
     """
     A cache of the QNH at a set of airports, kept fresh from the Metar-Taf API
-    by a background thread and saved to disk, so a restart serves the last
+    by a background task and saved to disk, so a restart serves the last
     known values straight away.
 
-    Nothing runs until ``start`` is called. Without an API key (``api_key``,
+    Nothing runs until ``start`` is awaited, on the event loop that will
+    serve requests. Without an API key (``api_key``,
     or the ``METAR-TAF`` environment variable) the cache never refreshes and
     only serves what was saved.
     """
@@ -40,10 +41,10 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
         "_cache",
         "_cache_path",
         "_interval",
-        "_lock",
         "_stop",
-        "_thread",
+        "_task",
         "_timeout",
+        "_transport",
         "_updated",
     )
 
@@ -54,6 +55,7 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
         api_key: str | None = None,
         cache_path: Path = DEFAULT_CACHE_PATH,
         timeout: float = DEFAULT_REQUEST_TIMEOUT,
+        transport: AsyncBaseTransport | None = None,
     ) -> None:
         if update_interval <= 0:
             raise ValueError(
@@ -69,9 +71,9 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
         self._cache_path: Path = cache_path
         self._cache: dict[str, int | None] = {port: None for port in self._airports}
         self._updated: int | None = None
-        self._lock: Lock = Lock()
+        self._transport: AsyncBaseTransport | None = transport
         self._stop: Event = Event()
-        self._thread: Thread | None = None
+        self._task: Task[None] | None = None
         self._load_cache()
 
     @property
@@ -81,12 +83,11 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
     @property
     def updated(self) -> int | None:
         """When the cache was last refreshed, in seconds since the epoch."""
-        with self._lock:
-            return self._updated
+        return self._updated
 
     @property
     def running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        return self._task is not None and not self._task.done()
 
     def _load_cache(self) -> None:
         if not self._cache_path.exists():
@@ -109,19 +110,17 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
         if not isinstance(saved, dict):
             return
 
-        with self._lock:
-            self._cache.update(
-                {
-                    airport: qnh
-                    for airport, qnh in saved.items()
-                    if airport in self._cache and isinstance(qnh, (int, float))
-                }
-            )
-            self._updated = updated if isinstance(updated, int) else None
+        self._cache.update(
+            {
+                airport: qnh
+                for airport, qnh in saved.items()
+                if airport in self._cache and isinstance(qnh, (int, float))
+            }
+        )
+        self._updated = updated if isinstance(updated, int) else None
 
     def _save_cache(self) -> None:
-        with self._lock:
-            data = {"updated": self._updated, "qnh": dict(self._cache)}
+        data = {"updated": self._updated, "qnh": dict(self._cache)}
 
         try:
             self._cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,10 +129,11 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
         except OSError as err:
             self.warning(f"Error saving cache: {err}")
 
-    def _fetch_qnh(self, airport: str) -> int | None:
+    async def _fetch_qnh(self, client: AsyncClient, airport: str) -> int | None:
         """
         Fetches the QNH from the METAR data in hPa
         Args:
+            client (AsyncClient): The HTTP client to make the request with.
             airport (str): The airport code for which to fetch the QNH value.
         Returns:
             int | None: The QNH value in hPa if available, otherwise None.
@@ -142,7 +142,7 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
             return None
 
         try:
-            response = get(
+            response = await client.get(
                 METAR_ENDPOINT,
                 params={
                     "api_key": self._api_key.get_secret_value(),
@@ -150,10 +150,8 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
                     "locale": "en-US",
                     "id": airport,
                 },
-                headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-                timeout=self._timeout,
             )
-        except RequestException as err:
+        except HTTPError as err:
             # Only the kind of failure: the message carries the URL, key included.
             self.warning(f"Request for {airport} METAR failed: {type(err).__name__}")
             return None
@@ -172,20 +170,31 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
             return None
         return data.get("metar", {}).get("qnh", None)
 
-    def refresh_cache(self) -> None:
+    async def refresh_cache(self) -> None:
         """
         Refreshes the QNH cache by fetching the latest QNH value for every
-        airport, then saves it. An airport whose fetch fails keeps its last
-        known value.
+        airport at once, then saves it. An airport whose fetch fails keeps its
+        last known value.
         """
-        fetched = {airport: self._fetch_qnh(airport) for airport in self._airports}
-        fresh = {airport: qnh for airport, qnh in fetched.items() if qnh is not None}
+        async with AsyncClient(
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            timeout=self._timeout,
+            transport=self._transport,
+        ) as client:
+            fetched = await gather(
+                *(self._fetch_qnh(client, airport) for airport in self._airports)
+            )
+
+        fresh = {
+            airport: qnh
+            for airport, qnh in zip(self._airports, fetched)
+            if qnh is not None
+        }
         if not fresh:
             return
 
-        with self._lock:
-            self._cache.update(fresh)
-            self._updated = int(time())
+        self._cache.update(fresh)
+        self._updated = int(time())
         self._save_cache()
 
     def get_qnh(self, airport: str) -> int | None:
@@ -206,23 +215,27 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
                 f"Airport {airport} is not registered in the cache."
             )
 
-        with self._lock:
-            return self._cache.get(airport, None)
+        return self._cache.get(airport, None)
 
-    def _run(self) -> None:
+    async def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                self.refresh_cache()
+                await self.refresh_cache()
                 self.debug(f"QNH cache refreshed. Next refresh in {self._interval}s.")
             except Exception as err:
-                # Never let one bad refresh end the thread.
+                # Never let one bad refresh end the task.
                 self.error(f"Error during scheduled refresh: {type(err).__name__}")
-            _ = self._stop.wait(self._interval)
 
-    def start(self) -> bool:
+            try:
+                _ = await wait_for(self._stop.wait(), timeout=self._interval)
+            except TimeoutError:
+                pass  # the interval is up: refresh again
+
+    async def start(self) -> bool:
         """
-        Start refreshing the cache in the background. Returns False, starting
-        nothing, if there is no API key or it is already running.
+        Start refreshing the cache in the background, on the running event
+        loop. Returns False, starting nothing, if there is no API key or it is
+        already running.
         """
         if self._api_key is None:
             self.warning(
@@ -233,14 +246,21 @@ class MetarCacheLayer(Loggable, log_name="metar", debug=True):
             return False
 
         self.info(f"Starting QNH cache refresh every {self._interval} seconds.")
-        self._stop.clear()
-        self._thread = Thread(target=self._run, name="metar-refresh", daemon=True)
-        self._thread.start()
+        self._stop = Event()
+        self._task = create_task(self._run(), name="metar-refresh")
         return True
 
-    def stop(self, timeout: float | None = None) -> None:
-        """Stop the background refresh, waiting up to ``timeout`` seconds for it."""
+    async def stop(self, timeout: float | None = None) -> None:
+        """
+        Stop the background refresh, waiting up to ``timeout`` seconds for a
+        refresh in progress before cancelling it.
+        """
+        task, self._task = self._task, None
+        if task is None:
+            return
+
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout)
-            self._thread = None
+        try:
+            await wait_for(task, timeout=timeout)
+        except TimeoutError:
+            pass  # wait_for has cancelled the refresh in progress

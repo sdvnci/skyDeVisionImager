@@ -1,13 +1,15 @@
 import builtins
 from abc import ABC
-from collections.abc import Generator, Mapping, Sequence
-from contextlib import contextmanager
+from asyncio import to_thread
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from enum import Enum
-from sqlite3 import Cursor, IntegrityError, Row
 from sqlite3 import Error as SQLError
+from sqlite3 import IntegrityError, Row
 from typing import Any, ClassVar, Final, Generic, cast, final, override
 
+from aiosqlite import Cursor
 from pydantic import SecretStr, ValidationError
 from pydantic_extra_types.mac_address import MacAddress
 
@@ -90,7 +92,8 @@ def _page(limit: int, page: int) -> tuple[int, int]:
 class Service(ABC, Generic[M]):
     """
     Abstract base class for a service: the in-between class for transactions
-    on one database table. Do not instantiate; every method is a classmethod.
+    on one database table. Do not instantiate; every method is a classmethod,
+    and every one that touches the database is a coroutine.
 
     Subclasses name their table and the model its rows deserialize into:
 
@@ -102,9 +105,9 @@ class Service(ABC, Generic[M]):
     own transaction; with one, it joins that cursor's transaction, which is
     how operations spanning tables stay atomic:
 
-        with Manager.cursor() as cur:
-            StationService.insert(station, cursor=cur)
-            ReadingService.insert(reading, cursor=cur)
+        async with Manager.cursor() as cur:
+            await StationService.insert(station, cursor=cur)
+            await ReadingService.insert(reading, cursor=cur)
 
     Methods:
         - get: Get an entity from the database.
@@ -157,10 +160,10 @@ class Service(ABC, Generic[M]):
         return QueryBuilder(f"SELECT * FROM {cls._table_name}")
 
     @classmethod
-    @contextmanager
-    def _cursor(
+    @asynccontextmanager
+    async def _cursor(
         cls: type["Service[M]"], cursor: Cursor | None = None
-    ) -> Generator[Cursor, None, None]:
+    ) -> AsyncGenerator[Cursor, None]:
         """
         The given cursor, or a new one in its own transaction when there is
         none. sqlite3 errors raised inside the block become DatabaseErrors.
@@ -169,7 +172,7 @@ class Service(ABC, Generic[M]):
             if cursor is not None:
                 yield cursor
             else:
-                with Manager.cursor() as cur:
+                async with Manager.cursor() as cur:
                     yield cur
         except IntegrityError as err:
             if err.sqlite_errorcode in (
@@ -197,24 +200,26 @@ class Service(ABC, Generic[M]):
             ) from err
 
     @classmethod
-    def _fetch(
+    async def _fetch(
         cls: type["Service[M]"],
         builder: QueryBuilder,
         cursor: Cursor | None = None,
     ) -> builtins.list[M]:
         query, params = builder.build()
-        with cls._cursor(cursor) as cur:
-            return [cls._model(row) for row in cur.execute(query, params).fetchall()]
+        async with cls._cursor(cursor) as cur:
+            rows = await (await cur.execute(query, params)).fetchall()
+        return [cls._model(row) for row in rows]
 
     @classmethod
-    def _has(
+    async def _has(
         cls: type["Service[M]"],
         builder: QueryBuilder,
         cursor: Cursor | None = None,
     ) -> bool:
         query, params = builder.limit(1).build()
-        with cls._cursor(cursor) as cur:
-            return cur.execute(query, params).fetchone() is not None
+        async with cls._cursor(cursor) as cur:
+            row = await (await cur.execute(query, params)).fetchone()
+        return row is not None
 
     @classmethod
     def _assignments(
@@ -242,51 +247,53 @@ class Service(ABC, Generic[M]):
         return clause, [_db_value(value) for value in changes.values()]
 
     @classmethod
-    def get(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> M | None:
+    async def get(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> M | None:
         raise NotImplementedError(f".get() method not implemented for {cls.__name__}")
 
     @classmethod
-    def list(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> builtins.list[M]:
+    async def list(
+        cls: type["Service[M]"], *args: Any, **kwargs: Any
+    ) -> builtins.list[M]:
         raise NotImplementedError(f".list() method not implemented for {cls.__name__}")
 
     @classmethod
-    def insert(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
+    async def insert(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
         raise NotImplementedError(
             f".insert() method not implemented for {cls.__name__}"
         )
 
     @classmethod
-    def update(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
+    async def update(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
         raise NotImplementedError(
             f".update() method not implemented for {cls.__name__}"
         )
 
     @classmethod
-    def delete(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
+    async def delete(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
         raise NotImplementedError(
             f".delete() method not implemented for {cls.__name__}"
         )
 
     @classmethod
-    def exists(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> bool:
+    async def exists(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> bool:
         raise NotImplementedError(
             f".exists() method not implemented for {cls.__name__}"
         )
 
     @classmethod
-    def insert_batch(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
+    async def insert_batch(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
         raise NotImplementedError(
             f".insert_batch() method not implemented for {cls.__name__}"
         )
 
     @classmethod
-    def update_batch(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
+    async def update_batch(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
         raise NotImplementedError(
             f".update_batch() method not implemented for {cls.__name__}"
         )
 
     @classmethod
-    def delete_batch(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
+    async def delete_batch(cls: type["Service[M]"], *args: Any, **kwargs: Any) -> None:
         raise NotImplementedError(
             f".delete_batch() method not implemented for {cls.__name__}"
         )
@@ -312,29 +319,29 @@ class UserService(Service[User], table_name="Users", table_row_type=User):
         raise InvalidInputError("Either 'id' or 'email' must be provided.")
 
     @classmethod
-    def _params(cls: type["UserService"], user: User) -> tuple[object, ...]:
+    async def _params(cls: type["UserService"], user: User) -> tuple[object, ...]:
         return (
             user.ID,
             user.name,
             user.email,
-            Manager.hash_password(user.password.get_secret_value()),
+            await to_thread(Manager.hash_password, user.password.get_secret_value()),
             user.role.value,
         )
 
     @classmethod
-    def _stored(cls: type["UserService"], values: UserJSON) -> dict[str, object]:
+    async def _stored(cls: type["UserService"], values: UserJSON) -> dict[str, object]:
         """A partial update with its password, if any, replaced by its hash."""
         stored: dict[str, object] = dict(values)
         password = stored.get("password")
         if isinstance(password, SecretStr):
             password = password.get_secret_value()
         if isinstance(password, str):
-            stored["password"] = Manager.hash_password(password)
+            stored["password"] = await to_thread(Manager.hash_password, password)
         return stored
 
     @override
     @classmethod
-    def get(
+    async def get(
         cls: type["UserService"],
         id: str | None = None,
         email: str | None = None,
@@ -351,12 +358,12 @@ class UserService(Service[User], table_name="Users", table_row_type=User):
             User | None: The user object if found, None otherwise.
         """
         column, value = cls._identify(id, email)
-        users = cls._fetch(cls.select().eq(column, value).limit(1), cursor)
+        users = await cls._fetch(cls.select().eq(column, value).limit(1), cursor)
         return users[0] if users else None
 
     @override
     @classmethod
-    def list(
+    async def list(
         cls: type["UserService"],
         limit: int = DEFAULT_PAGE_SIZE,
         page: int = 0,
@@ -370,13 +377,13 @@ class UserService(Service[User], table_name="Users", table_row_type=User):
             page (int): The page number to retrieve (0-indexed).
         """
         limit, offset = _page(limit, page)
-        return cls._fetch(
+        return await cls._fetch(
             cls.select().order_by("name").limit(limit).offset(offset), cursor
         )
 
     @override
     @classmethod
-    def insert(
+    async def insert(
         cls: type["UserService"], user: User, *, cursor: Cursor | None = None
     ) -> None:
         """
@@ -384,11 +391,11 @@ class UserService(Service[User], table_name="Users", table_row_type=User):
         Args:
             user (User): The user to insert.
         """
-        cls.insert_batch([user], cursor=cursor)
+        await cls.insert_batch([user], cursor=cursor)
 
     @override
     @classmethod
-    def insert_batch(
+    async def insert_batch(
         cls: type["UserService"],
         users: Sequence[User],
         *,
@@ -404,12 +411,14 @@ class UserService(Service[User], table_name="Users", table_row_type=User):
 
         Manager.debug(f"Inserting users :: {[user.ID for user in users]}")
         query = f"INSERT INTO {cls._table_name} VALUES (?, ?, ?, ?, ?);"
-        with cls._cursor(cursor) as cur:
-            _ = cur.executemany(query, [cls._params(user) for user in users])
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.executemany(
+                query, [await cls._params(user) for user in users]
+            )
 
     @override
     @classmethod
-    def update(
+    async def update(
         cls: type["UserService"],
         user: UserJSON,
         id: str | None = None,
@@ -430,19 +439,20 @@ class UserService(Service[User], table_name="Users", table_row_type=User):
         if not user:
             raise InvalidInputError("No user provided for update.")
 
-        clause, params = cls._assignments(cls._stored(user))
+        clause, params = cls._assignments(await cls._stored(user))
         query, params_tup = (
             QueryBuilder(f"UPDATE {cls._table_name} SET {clause}", *params)
             .eq(column, value, skip_none=False)
             .build()
         )
-        with cls._cursor(cursor) as cur:
-            if cur.execute(query, params_tup).rowcount == 0:
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.execute(query, params_tup)
+            if cur.rowcount == 0:
                 raise NotFoundError("No user found to update.")
 
     @override
     @classmethod
-    def update_batch(
+    async def update_batch(
         cls: type["UserService"],
         users: Sequence[tuple[str | None, str | None, UserJSON]],
         *,
@@ -459,13 +469,13 @@ class UserService(Service[User], table_name="Users", table_row_type=User):
         if not users:
             raise InvalidInputError("No user data provided.")
 
-        with cls._cursor(cursor) as cur:
+        async with cls._cursor(cursor) as cur:
             for id, email, user in users:
-                cls.update(user, id=id, email=email, cursor=cur)
+                await cls.update(user, id=id, email=email, cursor=cur)
 
     @override
     @classmethod
-    def delete(
+    async def delete(
         cls: type["UserService"],
         id: str | None = None,
         email: str | None = None,
@@ -486,13 +496,14 @@ class UserService(Service[User], table_name="Users", table_row_type=User):
             .eq(column, value, skip_none=False)
             .build()
         )
-        with cls._cursor(cursor) as cur:
-            if cur.execute(query, params).rowcount == 0:
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.execute(query, params)
+            if cur.rowcount == 0:
                 raise NotFoundError("No user found to delete.")
 
     @override
     @classmethod
-    def exists(
+    async def exists(
         cls: type["UserService"],
         id: str | None = None,
         email: str | None = None,
@@ -500,7 +511,7 @@ class UserService(Service[User], table_name="Users", table_row_type=User):
         cursor: Cursor | None = None,
     ) -> bool:
         column, value = cls._identify(id, email)
-        return cls._has(cls.select().eq(column, value), cursor)
+        return await cls._has(cls.select().eq(column, value), cursor)
 
 
 @final
@@ -529,7 +540,7 @@ class StatusService(
 
     @override
     @classmethod
-    def get(
+    async def get(
         cls: type["StatusService"],
         MAC: MacAddress | str,
         *,
@@ -543,7 +554,7 @@ class StatusService(
         Returns:
             StationStatus | None: The station status object if found, None otherwise.
         """
-        statuses = cls._fetch(
+        statuses = await cls._fetch(
             cls.select().eq("MAC", _mac(MAC, "retrieve a station status")).limit(1),
             cursor,
         )
@@ -551,7 +562,7 @@ class StatusService(
 
     @override
     @classmethod
-    def list(
+    async def list(
         cls: type["StatusService"],
         limit: int = DEFAULT_PAGE_SIZE,
         page: int = 0,
@@ -565,13 +576,13 @@ class StatusService(
             page (int): The page number to retrieve (0-indexed).
         """
         limit, offset = _page(limit, page)
-        return cls._fetch(
+        return await cls._fetch(
             cls.select().order_by("timestamp").limit(limit).offset(offset), cursor
         )
 
     @override
     @classmethod
-    def insert(
+    async def insert(
         cls: type["StatusService"],
         status: StationStatus,
         *,
@@ -582,11 +593,11 @@ class StatusService(
         Args:
             status (StationStatus): The station status to insert.
         """
-        cls.insert_batch([status], cursor=cursor)
+        await cls.insert_batch([status], cursor=cursor)
 
     @override
     @classmethod
-    def insert_batch(
+    async def insert_batch(
         cls: type["StatusService"],
         statuses: Sequence[StationStatus],
         *,
@@ -603,12 +614,12 @@ class StatusService(
         Manager.debug(f"Inserting station statuses :: {statuses}")
         query = f"INSERT INTO {cls._table_name} VALUES (?, ?, ?, ?, ?, ?);"
         params = [(str(status.MAC), *cls._flags(status)) for status in statuses]
-        with cls._cursor(cursor) as cur:
-            _ = cur.executemany(query, params)
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.executemany(query, params)
 
     @override
     @classmethod
-    def update(
+    async def update(
         cls: type["StatusService"],
         MAC: MacAddress | str,
         status: StationStatus,
@@ -623,11 +634,11 @@ class StatusService(
         Raises:
             NotFoundError: If no station status is found to update.
         """
-        cls.update_batch([(MAC, status)], cursor=cursor)
+        await cls.update_batch([(MAC, status)], cursor=cursor)
 
     @override
     @classmethod
-    def update_batch(
+    async def update_batch(
         cls: type["StatusService"],
         statuses: Sequence[tuple[MacAddress | str, StationStatus]],
         *,
@@ -647,13 +658,14 @@ class StatusService(
             (*cls._flags(status), _mac(mac, "update a station status"))
             for mac, status in statuses
         ]
-        with cls._cursor(cursor) as cur:
-            if cur.executemany(cls._UPDATE, params).rowcount != len(params):
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.executemany(cls._UPDATE, params)
+            if cur.rowcount != len(params):
                 raise NotFoundError("No station status found to update.")
 
     @override
     @classmethod
-    def delete(
+    async def delete(
         cls: type["StatusService"],
         MAC: MacAddress | str,
         *,
@@ -666,11 +678,11 @@ class StatusService(
         Raises:
             NotFoundError: If no station status is found to delete.
         """
-        cls.delete_batch([MAC], cursor=cursor)
+        await cls.delete_batch([MAC], cursor=cursor)
 
     @override
     @classmethod
-    def delete_batch(
+    async def delete_batch(
         cls: type["StatusService"],
         MACS: Sequence[MacAddress | str],
         *,
@@ -688,13 +700,14 @@ class StatusService(
 
         query = f"DELETE FROM {cls._table_name} WHERE MAC = ?;"
         params = [(_mac(mac, "delete a station status"),) for mac in MACS]
-        with cls._cursor(cursor) as cur:
-            if cur.executemany(query, params).rowcount != len(params):
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.executemany(query, params)
+            if cur.rowcount != len(params):
                 raise NotFoundError("No station status found to delete.")
 
     @override
     @classmethod
-    def exists(
+    async def exists(
         cls: type["StatusService"],
         MAC: MacAddress | str,
         *,
@@ -705,12 +718,12 @@ class StatusService(
         Args:
             MAC (MacAddress): The MAC address of the station status to check.
         """
-        return cls._has(
+        return await cls._has(
             cls.select().eq("MAC", _mac(MAC, "check station status existence")), cursor
         )
 
     @classmethod
-    def exists_batch(
+    async def exists_batch(
         cls: type["StatusService"],
         MACS: Sequence[MacAddress | str],
         *,
@@ -734,8 +747,9 @@ class StatusService(
         query, params = (
             QueryBuilder(f"SELECT MAC FROM {cls._table_name}").in_("MAC", macs).build()
         )
-        with cls._cursor(cursor) as cur:
-            found = {row["MAC"] for row in cur.execute(query, params).fetchall()}
+        async with cls._cursor(cursor) as cur:
+            rows = await (await cur.execute(query, params)).fetchall()
+        found = {row["MAC"] for row in rows}
         return [mac in found for mac in macs]
 
 
@@ -773,7 +787,7 @@ class StationService(Service[Station], table_name="Stations", table_row_type=Sta
 
     @override
     @classmethod
-    def get(
+    async def get(
         cls: type["StationService"],
         MAC: MacAddress | str,
         *,
@@ -787,14 +801,14 @@ class StationService(Service[Station], table_name="Stations", table_row_type=Sta
         Returns:
             Station | None: The station object if found, None otherwise.
         """
-        stations = cls._fetch(
+        stations = await cls._fetch(
             cls.select().eq("s.MAC", _mac(MAC, "retrieve a station")).limit(1), cursor
         )
         return stations[0] if stations else None
 
     @override
     @classmethod
-    def list(
+    async def list(
         cls: type["StationService"],
         limit: int = DEFAULT_PAGE_SIZE,
         page: int = 0,
@@ -808,13 +822,13 @@ class StationService(Service[Station], table_name="Stations", table_row_type=Sta
             page (int): The page number to retrieve (0-indexed).
         """
         limit, offset = _page(limit, page)
-        return cls._fetch(
+        return await cls._fetch(
             cls.select().order_by("s.name").limit(limit).offset(offset), cursor
         )
 
     @override
     @classmethod
-    def insert(
+    async def insert(
         cls: type["StationService"],
         station: Station,
         *,
@@ -835,8 +849,8 @@ class StationService(Service[Station], table_name="Stations", table_row_type=Sta
         )
 
         query = f"INSERT INTO {cls._table_name} VALUES (?, ?, ?, ?, ?, ?, ?, ?);"
-        with cls._cursor(cursor) as cur:
-            _ = cur.execute(
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.execute(
                 query,
                 (
                     str(station.MAC),
@@ -849,13 +863,13 @@ class StationService(Service[Station], table_name="Stations", table_row_type=Sta
                     float(station.longitude),
                 ),
             )
-            StatusService.insert(status, cursor=cur)
+            await StatusService.insert(status, cursor=cur)
 
         station.sensors = status
 
     @override
     @classmethod
-    def update(
+    async def update(
         cls: type["StationService"],
         MAC: MacAddress | str,
         station: StationJSON,
@@ -880,13 +894,14 @@ class StationService(Service[Station], table_name="Stations", table_row_type=Sta
             .eq("MAC", _mac(MAC, "update a station"), skip_none=False)
             .build()
         )
-        with cls._cursor(cursor) as cur:
-            if cur.execute(query, params_tup).rowcount == 0:
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.execute(query, params_tup)
+            if cur.rowcount == 0:
                 raise NotFoundError("No station found to update.")
 
     @override
     @classmethod
-    def delete(
+    async def delete(
         cls: type["StationService"],
         MAC: MacAddress | str,
         *,
@@ -905,17 +920,17 @@ class StationService(Service[Station], table_name="Stations", table_row_type=Sta
         """
 
         mac = (_mac(MAC, "delete a station"),)
-        with cls._cursor(cursor) as cur:
+        async with cls._cursor(cursor) as cur:
             if readings:
-                _ = cur.execute("DELETE FROM Readings WHERE MAC = ?;", mac)
-            _ = cur.execute("DELETE FROM Status WHERE MAC = ?;", mac)
-            _ = cur.execute(f"DELETE FROM {cls._table_name} WHERE MAC = ?;", mac)
+                _ = await cur.execute("DELETE FROM Readings WHERE MAC = ?;", mac)
+            _ = await cur.execute("DELETE FROM Status WHERE MAC = ?;", mac)
+            _ = await cur.execute(f"DELETE FROM {cls._table_name} WHERE MAC = ?;", mac)
             if cur.rowcount == 0:
                 raise NotFoundError("No station found to delete.")
 
     @override
     @classmethod
-    def exists(
+    async def exists(
         cls: type["StationService"],
         MAC: MacAddress | str,
         *,
@@ -926,7 +941,7 @@ class StationService(Service[Station], table_name="Stations", table_row_type=Sta
         Args:
             MAC (MacAddress): The MAC address of the station to check.
         """
-        return cls._has(
+        return await cls._has(
             cls.select().eq("s.MAC", _mac(MAC, "check if a station exists")), cursor
         )
 
@@ -967,7 +982,7 @@ class ReadingService(Service[Reading], table_name="Readings", table_row_type=Rea
 
     @override
     @classmethod
-    def get(
+    async def get(
         cls: type["ReadingService"],
         MAC: MacAddress | str,
         timestamp: datetime,
@@ -983,12 +998,12 @@ class ReadingService(Service[Reading], table_name="Readings", table_row_type=Rea
         Returns:
             Reading | None: The reading object if found, None otherwise.
         """
-        readings = cls._fetch(cls._key(MAC, timestamp).limit(1), cursor)
+        readings = await cls._fetch(cls._key(MAC, timestamp).limit(1), cursor)
         return readings[0] if readings else None
 
     @override
     @classmethod
-    def list(
+    async def list(
         cls: type["ReadingService"],
         MAC: MacAddress | str,
         start: datetime | None = None,
@@ -1010,7 +1025,7 @@ class ReadingService(Service[Reading], table_name="Readings", table_row_type=Rea
         """
 
         limit, offset = _page(limit, page)
-        return cls._fetch(
+        return await cls._fetch(
             cls.select()
             .eq("MAC", _mac(MAC, "list readings"))
             .gte("timestamp", dt2str(start) if start else None)
@@ -1023,7 +1038,7 @@ class ReadingService(Service[Reading], table_name="Readings", table_row_type=Rea
 
     @override
     @classmethod
-    def insert(
+    async def insert(
         cls: type["ReadingService"],
         reading: Reading,
         *,
@@ -1037,11 +1052,11 @@ class ReadingService(Service[Reading], table_name="Readings", table_row_type=Rea
             AlreadyExistsError: If the station already has a reading at this timestamp.
             InvalidInputError: If the reading's station is not registered.
         """
-        cls.insert_batch([reading], cursor=cursor)
+        await cls.insert_batch([reading], cursor=cursor)
 
     @override
     @classmethod
-    def insert_batch(
+    async def insert_batch(
         cls: type["ReadingService"],
         readings: Sequence[Reading],
         *,
@@ -1057,11 +1072,13 @@ class ReadingService(Service[Reading], table_name="Readings", table_row_type=Rea
 
         Manager.debug(f"Inserting readings :: {readings}")
         query = f"INSERT INTO {cls._table_name} VALUES (?, ?, ?, ?, ?, ?, ?);"
-        with cls._cursor(cursor) as cur:
-            _ = cur.executemany(query, [cls._params(reading) for reading in readings])
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.executemany(
+                query, [cls._params(reading) for reading in readings]
+            )
 
     @classmethod
-    def upsert(
+    async def upsert(
         cls: type["ReadingService"],
         reading: Reading,
         *,
@@ -1082,12 +1099,12 @@ class ReadingService(Service[Reading], table_name="Readings", table_row_type=Rea
             "pressure = excluded.pressure, dewpoint = excluded.dewpoint, "
             "filepath = excluded.filepath;"
         )
-        with cls._cursor(cursor) as cur:
-            _ = cur.execute(query, cls._params(reading))
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.execute(query, cls._params(reading))
 
     @override
     @classmethod
-    def update(
+    async def update(
         cls: type["ReadingService"],
         MAC: MacAddress | str,
         timestamp: datetime,
@@ -1116,13 +1133,14 @@ class ReadingService(Service[Reading], table_name="Readings", table_row_type=Rea
             _mac(MAC, "update a reading"),
             dt2str(timestamp),
         )
-        with cls._cursor(cursor) as cur:
-            if cur.execute(query, params).rowcount == 0:
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.execute(query, params)
+            if cur.rowcount == 0:
                 raise NotFoundError("No reading found to update.")
 
     @override
     @classmethod
-    def delete(
+    async def delete(
         cls: type["ReadingService"],
         MAC: MacAddress | str,
         timestamp: datetime,
@@ -1141,18 +1159,16 @@ class ReadingService(Service[Reading], table_name="Readings", table_row_type=Rea
             raise InvalidInputError("timestamp must be provided to delete a reading.")
 
         query = f"DELETE FROM {cls._table_name} WHERE MAC = ? AND timestamp = ?;"
-        with cls._cursor(cursor) as cur:
-            if (
-                cur.execute(
-                    query, (_mac(MAC, "delete a reading"), dt2str(timestamp))
-                ).rowcount
-                == 0
-            ):
+        async with cls._cursor(cursor) as cur:
+            _ = await cur.execute(
+                query, (_mac(MAC, "delete a reading"), dt2str(timestamp))
+            )
+            if cur.rowcount == 0:
                 raise NotFoundError("No reading found to delete.")
 
     @override
     @classmethod
-    def exists(
+    async def exists(
         cls: type["ReadingService"],
         MAC: MacAddress | str,
         timestamp: datetime,
@@ -1165,4 +1181,4 @@ class ReadingService(Service[Reading], table_name="Readings", table_row_type=Rea
             MAC (MacAddress): The MAC address of the station the reading belongs to.
             timestamp (datetime): The timestamp of the reading to check.
         """
-        return cls._has(cls._key(MAC, timestamp), cursor)
+        return await cls._has(cls._key(MAC, timestamp), cursor)

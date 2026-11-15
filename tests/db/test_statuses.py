@@ -1,5 +1,5 @@
 from typing import no_type_check
-from flask.testing import FlaskClient
+from quart.typing import TestClientProtocol as Client
 from server.db import (
     StationStatus,
     Station,
@@ -12,15 +12,15 @@ from server.db import CameraModel, DeviceType
 
 
 @no_type_check
-def test_get_status_not_found(client: FlaskClient) -> None:
-    result = StatusService.get(MAC="00:1A:2B:3C:4D:5E")
+async def test_get_status_not_found(client: Client) -> None:
+    result = await StatusService.get(MAC="00:1A:2B:3C:4D:5E")
     assert (
         result is None
     ), f"MAC address is not registered, should be None but got {result}"
 
 
 @no_type_check
-def test_insert_and_get_status_success(client: FlaskClient) -> None:
+async def test_insert_and_get_status_success(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -40,16 +40,16 @@ def test_insert_and_get_status_success(client: FlaskClient) -> None:
         ),
     )
 
-    StationService.insert(station=station)
+    await StationService.insert(station=station)
 
-    status = StatusService.get(MAC=station.MAC)
+    status = await StatusService.get(MAC=station.MAC)
     assert status is not None, "Could not retrieve newly inserted status"
     assert isinstance(status, StationStatus), "Expected StationStatus instance"
     assert station.sensors == status, "Inserted status does not match retrieved status"
 
 
 @no_type_check
-def test_list_statuses(client: FlaskClient) -> None:
+async def test_list_statuses(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -68,9 +68,9 @@ def test_list_statuses(client: FlaskClient) -> None:
             WIFI=False,
         ),
     )
-    StationService.insert(station=station)
+    await StationService.insert(station=station)
 
-    statuses = StatusService.list()
+    statuses = await StatusService.list()
     assert isinstance(statuses, list), "Expected a list of statuses"
     assert len(statuses) > 0, "Expected at least one status in the database"
     for status in statuses:
@@ -80,8 +80,8 @@ def test_list_statuses(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_list_statuses_unsuccessful(client: FlaskClient) -> None:
-    statuses = StatusService.list()
+async def test_list_statuses_unsuccessful(client: Client) -> None:
+    statuses = await StatusService.list()
     assert isinstance(statuses, list), "Expected a list of statuses"
     assert (
         len(statuses) == 0
@@ -89,7 +89,7 @@ def test_list_statuses_unsuccessful(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_list_statuses_multiple(client: FlaskClient) -> None:
+async def test_list_statuses_multiple(client: Client) -> None:
     for i in range(5):
         station = Station(
             MAC=f"00:1A:2B:3C:4D:{i}E",
@@ -109,9 +109,9 @@ def test_list_statuses_multiple(client: FlaskClient) -> None:
                 WIFI=False,
             ),
         )
-        StationService.insert(station=station)
+        await StationService.insert(station=station)
 
-    statuses = StatusService.list()
+    statuses = await StatusService.list()
     assert isinstance(statuses, list), "Expected a list of statuses"
     assert len(statuses) > 0, "Expected at least one status in the database"
     for status in statuses:
@@ -121,7 +121,7 @@ def test_list_statuses_multiple(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_list_statuses_offset(client: FlaskClient) -> None:
+async def test_list_statuses_offset(client: Client) -> None:
 
     for i in range(10):
         station = Station(
@@ -142,12 +142,12 @@ def test_list_statuses_offset(client: FlaskClient) -> None:
                 WIFI=False,
             ),
         )
-        StationService.insert(station=station)
+        await StationService.insert(station=station)
 
     limit = 5
     page = 1
     offset = limit * page
-    offset_statuses = StatusService.list(limit=limit, page=page)
+    offset_statuses = await StatusService.list(limit=limit, page=page)
     assert (
         len(offset_statuses) == 10 - offset
     ), f"Expected 5 statuses after offset, got {len(offset_statuses)}"
@@ -158,7 +158,7 @@ def test_list_statuses_offset(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_update_status_successful(client: FlaskClient) -> None:
+async def test_update_status_successful(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -177,7 +177,7 @@ def test_update_status_successful(client: FlaskClient) -> None:
             WIFI=False,
         ),
     )
-    StationService.insert(station=station)
+    await StationService.insert(station=station)
 
     updated_status = StationStatus(
         MAC="00:1A:2B:3C:4D:5E",
@@ -187,15 +187,15 @@ def test_update_status_successful(client: FlaskClient) -> None:
         CAM=True,
         WIFI=True,
     )
-    StatusService.update(MAC=station.MAC, status=updated_status)
+    await StatusService.update(MAC=station.MAC, status=updated_status)
 
-    status = StatusService.get(MAC=station.MAC)
+    status = await StatusService.get(MAC=station.MAC)
     assert status is not None, "Could not retrieve updated status"
     assert status == updated_status, "Updated status does not match retrieved status"
 
 
 @no_type_check
-def test_update_status_nonexistant(client: FlaskClient) -> None:
+async def test_update_status_nonexistant(client: Client) -> None:
     updated_status = StationStatus(
         MAC="00:1A:2B:3C:4D:5E",
         timestamp=datetime.now(tz=UTC),
@@ -206,7 +206,7 @@ def test_update_status_nonexistant(client: FlaskClient) -> None:
     )
 
     try:
-        StatusService.update(MAC=updated_status.MAC, status=updated_status)
+        await StatusService.update(MAC=updated_status.MAC, status=updated_status)
         raise AssertionError(
             "This MAC doesn't exist and should've raised a NotFoundError."
         )
@@ -215,7 +215,7 @@ def test_update_status_nonexistant(client: FlaskClient) -> None:
 
 
 @no_type_check
-def test_delete_status_successful(client: FlaskClient) -> None:
+async def test_delete_status_successful(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -234,29 +234,29 @@ def test_delete_status_successful(client: FlaskClient) -> None:
             WIFI=False,
         ),
     )
-    StationService.insert(station=station)
+    await StationService.insert(station=station)
 
-    StatusService.delete(MAC=station.MAC)
+    await StatusService.delete(MAC=station.MAC)
 
-    status = StatusService.get(MAC=station.MAC)
+    status = await StatusService.get(MAC=station.MAC)
     assert status is None, "Status should be deleted, but still exists"
 
 
 @no_type_check
-def test_delete_status_nonexistant(client: FlaskClient) -> None:
+async def test_delete_status_nonexistant(client: Client) -> None:
     MAC = "00:1A:2B:3C:4D:5E"
 
     try:
-        StatusService.delete(MAC=MAC)
+        await StatusService.delete(MAC=MAC)
         AssertionError("This MAC doesn't exist and should've raised a NotFoundError.")
     except NotFoundError as err:
         pass
-    status = StatusService.get(MAC=MAC)
+    status = await StatusService.get(MAC=MAC)
     assert status is None, "Status should be deleted, but still exists"
 
 
 @no_type_check
-def test_status_exists_true(client: FlaskClient) -> None:
+async def test_status_exists_true(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -275,22 +275,22 @@ def test_status_exists_true(client: FlaskClient) -> None:
             WIFI=False,
         ),
     )
-    StationService.insert(station=station)
+    await StationService.insert(station=station)
 
-    exists = StatusService.exists(MAC=station.MAC)
+    exists = await StatusService.exists(MAC=station.MAC)
     assert exists, "Status should exist for the inserted station"
 
 
 @no_type_check
-def test_status_exists_false(client: FlaskClient) -> None:
+async def test_status_exists_false(client: Client) -> None:
 
     MAC = "00:1A:2B:3C:4D:5E"
-    exists = StatusService.exists(MAC=MAC)
+    exists = await StatusService.exists(MAC=MAC)
     assert exists == False, f"Status should not exist for MAC {MAC}."
 
 
 @no_type_check
-def test_status_exists_after_delete(client: FlaskClient) -> None:
+async def test_status_exists_after_delete(client: Client) -> None:
     station = Station(
         MAC="00:1A:2B:3C:4D:5E",
         name="station",
@@ -309,12 +309,12 @@ def test_status_exists_after_delete(client: FlaskClient) -> None:
             WIFI=False,
         ),
     )
-    StationService.insert(station=station)
+    await StationService.insert(station=station)
 
-    exists = StatusService.exists(MAC=station.MAC)
+    exists = await StatusService.exists(MAC=station.MAC)
     assert exists, "Status should exist for the inserted station"
 
-    StationService.delete(MAC=station.MAC)
+    await StationService.delete(MAC=station.MAC)
 
-    exists = StatusService.exists(MAC=station.MAC)
+    exists = await StatusService.exists(MAC=station.MAC)
     assert exists == False, f"Status should not exist for deleted MAC {station.MAC}"

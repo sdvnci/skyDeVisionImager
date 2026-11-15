@@ -1,27 +1,21 @@
+from asyncio import sleep, wait_for
 from json import dumps, loads
 from pathlib import Path
 
 import pytest
-from requests import ConnectionError as RequestsConnectionError
+from httpx import ConnectError, MockTransport, Request, Response
 
 from server.metar import MetarCacheLayer, UnregisteredAirportException
-from server.metar import metar as metar_module
 
 
-class FakeResponse:
-    def __init__(self, status_code: int, payload: object) -> None:
-        self.status_code = status_code
-        self._payload = payload
-
-    def json(self) -> object:
-        return self._payload
-
-
-def cache_at(tmp_path: Path, api_key: str = "key") -> MetarCacheLayer:
+def cache_at(
+    tmp_path: Path, transport: MockTransport | None = None, api_key: str = "key"
+) -> MetarCacheLayer:
     return MetarCacheLayer(
         airports=["ESMX", "ESSA"],
         api_key=api_key,
         cache_path=tmp_path / "airports.json",
+        transport=transport,
     )
 
 
@@ -32,9 +26,9 @@ def test_nothing_runs_until_started(tmp_path: Path) -> None:
     assert cache.updated is None
 
 
-def test_start_without_api_key_does_nothing(tmp_path: Path) -> None:
+async def test_start_without_api_key_does_nothing(tmp_path: Path) -> None:
     cache = cache_at(tmp_path, api_key="")
-    assert cache.start() is False
+    assert await cache.start() is False
     assert not cache.running
 
 
@@ -43,23 +37,21 @@ def test_unregistered_airport(tmp_path: Path) -> None:
         _ = cache_at(tmp_path).get_qnh("KJFK")
 
 
-def test_refresh_updates_and_saves(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_refresh_updates_and_saves(tmp_path: Path) -> None:
     asked: list[str] = []
 
-    def fake_get(url: str, **kwargs: dict[str, str]) -> FakeResponse:
-        airport = kwargs["params"]["id"]
+    def handler(request: Request) -> Response:
+        airport = request.url.params["id"]
         asked.append(airport)
+        assert request.url.params["api_key"] == "key"
         if airport == "ESSA":
-            return FakeResponse(500, {})
-        return FakeResponse(200, {"metar": {"qnh": 1009}})
+            return Response(500, json={})
+        return Response(200, json={"metar": {"qnh": 1009}})
 
-    monkeypatch.setattr(metar_module, "get", fake_get)
-    cache = cache_at(tmp_path)
-    cache.refresh_cache()
+    cache = cache_at(tmp_path, MockTransport(handler))
+    await cache.refresh_cache()
 
-    assert asked == ["ESMX", "ESSA"]
+    assert sorted(asked) == ["ESMX", "ESSA"]
     assert cache.get_qnh("ESMX") == 1009
     assert cache.get_qnh("ESSA") is None, "A failed fetch must not invent a value"
     assert cache.updated is not None
@@ -74,32 +66,35 @@ def test_refresh_updates_and_saves(
     assert reloaded.updated == cache.updated
 
 
-def test_failed_refresh_keeps_last_known_values(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    (tmp_path / "airports.json").write_text(dumps({"ESMX": 1001, "KJFK": 990}))
+async def test_failed_refresh_keeps_last_known_values(tmp_path: Path) -> None:
+    _ = (tmp_path / "airports.json").write_text(dumps({"ESMX": 1001, "KJFK": 990}))
 
-    def fake_get(url: str, **kwargs: object) -> FakeResponse:
-        raise RequestsConnectionError("https://example.invalid/?api_key=key")
+    def handler(request: Request) -> Response:
+        raise ConnectError("no route to host", request=request)
 
-    monkeypatch.setattr(metar_module, "get", fake_get)
-    cache = cache_at(tmp_path)
-    cache.refresh_cache()
+    cache = cache_at(tmp_path, MockTransport(handler))
+    await cache.refresh_cache()
 
     assert cache.get_qnh("ESMX") == 1001, "Legacy cache files should still load"
     assert cache.updated is None
 
 
-def test_start_and_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_get(url: str, **kwargs: object) -> FakeResponse:
-        return FakeResponse(200, {"metar": {"qnh": 1020}})
+async def test_start_and_stop(tmp_path: Path) -> None:
+    def handler(request: Request) -> Response:
+        return Response(200, json={"metar": {"qnh": 1020}})
 
-    monkeypatch.setattr(metar_module, "get", fake_get)
-    cache = cache_at(tmp_path)
+    cache = cache_at(tmp_path, MockTransport(handler))
 
-    assert cache.start() is True
-    assert cache.start() is False, "Already running"
-    cache.stop(timeout=5)
+    assert await cache.start() is True
+    assert await cache.start() is False, "Already running"
+    assert cache.running
+
+    async def refreshed() -> None:
+        while cache.updated is None:
+            await sleep(0.01)
+
+    await wait_for(refreshed(), timeout=5)
+    await cache.stop(timeout=5)
 
     assert not cache.running
     assert cache.get_qnh("ESMX") == 1020

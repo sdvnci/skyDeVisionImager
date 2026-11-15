@@ -1,6 +1,6 @@
-from sqlite3 import Cursor
 from typing import Final
 
+#: One statement per table, each safe to run against an existing database.
 SCHEMA: Final[tuple[str, ...]] = (
     """
     CREATE TABLE IF NOT EXISTS Stations(
@@ -58,9 +58,3 @@ SCHEMA: Final[tuple[str, ...]] = (
     );
     """,
 )
-
-
-def apply_schema(cursor: Cursor) -> None:
-    """Create every table that doesn't exist yet."""
-    for statement in SCHEMA:
-        _ = cursor.execute(statement)
