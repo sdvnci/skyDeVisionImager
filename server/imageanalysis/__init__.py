@@ -30,7 +30,6 @@ from .configuration import (
 
 from .roccurve import ROCAnalyzer, BoundaryArray, AnalysisConfiguration
 
-
 __all__ = (
     "ColorImage",
     "GrayScaleImage",

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, Callable, Final, NamedTuple, Optional, cast
+from collections.abc import Callable
+from typing import Annotated, Any, Final, NamedTuple, cast
 
 import numpy as np
 from cv2 import (
@@ -224,7 +225,7 @@ class ColourTag(Enum):
         return self.value.callback
 
 
-def get_nonblack_pixels(image: Optional[ColorImage], ctag: ColourTag) -> PixelData:
+def get_nonblack_pixels(image: ColorImage | None, ctag: ColourTag) -> PixelData:
     """
     Extract non-black pixels from an image file based on the specified color tag.
 
@@ -268,7 +269,10 @@ def remove_outliers_iqr(data: PixelData) -> PixelData:
     lower_bound = Q1 - 1.5 * IQR
     upper_bound = Q3 + 1.5 * IQR
     # Ensure 2D structure is preserved
-    return data[((data >= lower_bound) & (data <= upper_bound)).all(axis=1)]
+    inliers: PixelData = data[
+        ((data >= lower_bound) & (data <= upper_bound)).all(axis=1)
+    ]
+    return inliers
 
 
 def count(xyz_sk: ComponentData) -> FrequencyTable:
@@ -407,8 +411,8 @@ def get_masks_vstack(
     if any(mask is None for mask in sky_masks):
         raise ValueError("Could not read one or more sky masks.")
 
-    clouds = vstack(cast(list[MatLike], cloud_masks), dtype=bool_)
-    skies = vstack(cast(list[MatLike], sky_masks), dtype=bool_)
+    clouds = vstack(cloud_masks, dtype=bool_)
+    skies = vstack(sky_masks, dtype=bool_)
 
     return clouds, skies
 
@@ -416,8 +420,6 @@ def get_masks_vstack(
 def get_masks_vstacks_sparse(
     camera: Camera, indices: NDArray[np.uint16]
 ) -> tuple[BitMapImage, BitMapImage]:
-    from cv2 import imshow, waitKey
-
     """
     Create sparse stacked masks where output position matches index value.
 

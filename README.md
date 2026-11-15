@@ -34,6 +34,24 @@ cd skyDeVisionImager
 pip install -r requirements.txt
 ```
 
+### Configuration
+Settings are read from the environment, or a `.env` file:
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `DBSECRET` | Secret the server signs sessions and peppers passwords with. **Required.** | - |
+| `DBFILE` | Path to the SQLite database file | `database.db` |
+| `DB_POOL_SIZE` | Most database connections open at once | `5` |
+| `DB_POOL_TIMEOUT` | Seconds to wait for a free connection, or a locked database | `10` |
+| `METAR-TAF` | metar-taf.com API key. Without it the QNH cache is never refreshed. | - |
+
+### Development
+```bash
+black --check .   # formatting
+mypy .            # strict type checking
+pytest -q         # tests
+```
+
 ## Server Components
 
 ### API Endpoints (`server/api.py`)
@@ -43,13 +61,15 @@ pip install -r requirements.txt
 - `POST /api/status` - Update sensor status (SHT, BMP, CAM, WIFI)
 
 **Data Collection**
-- `POST /api/reading` - Submit environmental reading (temperature, humidity, pressure, dewpoint)
-- `GET /api/qnh` - Retrieve current QNH from cached METAR data
+- `POST /api/reading` - Submit environmental reading (temperature, humidity, pressure, dewpoint). The reading is stamped with `X-Timestamp`; resending one replaces it.
+- `GET /api/qnh` - Retrieve current QNH from cached METAR data. `?airport=` picks one of the cached airports.
 
 **System**
 - `GET /api/check` - API health check
 
-All endpoints expect headers: `X-MAC-Address`, `X-Timestamp`, `X-Firmware-Version`
+Device endpoints (`register`, `status`, `reading`) expect headers: `X-MAC-Address`, `X-Timestamp`, `X-Firmware-Version`
+
+Errors are returned as `{"errors": [{"title", "details", "code", "source"}], "timestamp"}`.
 
 ### Database (`server/db/`)
 
@@ -66,11 +86,22 @@ All endpoints expect headers: `X-MAC-Address`, `X-Timestamp`, `X-Firmware-Versio
 - `StatusService` - Sensor status tracking
 - `UserService` - User management with password hashing
 
+Services are never instantiated; every method is a classmethod. Each call is its own
+transaction unless it is handed a `cursor`, which is how operations across tables stay atomic:
+
+```python
+from server.db import Manager, ReadingService, StationService
+
+with Manager.cursor() as cursor:  # commits on success, rolls back on any error
+    StationService.insert(station, cursor=cursor)
+    ReadingService.insert(reading, cursor=cursor)
+```
+
 ### METAR Integration (`server/metar/`)
 
 **MetarCacheLayer**
-- Background thread updates QNH values every 10 minutes via metar-taf.com API
-- Thread-safe cache with persistent storage
+- Background thread updates QNH values every 10 minutes via metar-taf.com API, once `start()` is called
+- Thread-safe cache, saved to disk so a restart serves the last known values
 - Supports multiple airport codes
 - Graceful fallback on API failures
 
@@ -96,12 +127,10 @@ All endpoints expect headers: `X-MAC-Address`, `X-Timestamp`, `X-Firmware-Versio
 
 ### Running the Server
 ```python
-from flask import Flask
-from server.api import apiRouter
-from server.db import Manager
+from server import Manager, create_app
 
-app = Flask(__name__)
-app.register_blueprint(apiRouter)
+# Loads the configuration and starts the QNH cache
+app = create_app()
 
 # Initialize database
 Manager.connect("weather_data.db")

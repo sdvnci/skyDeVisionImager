@@ -1,11 +1,12 @@
 import pickle
 from hashlib import md5
 from io import TextIOWrapper
+from logging import Logger, getLogger
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal
 
 import numpy as np
-from numba import njit, types  # type: ignore
+from numba import njit, types
 from numpy import (
     arange,
     array,
@@ -30,12 +31,15 @@ from numpy import (
 )
 from numpy.typing import NDArray
 from plotly.graph_objects import Figure, Surface  # type: ignore
-from rasterio import io
-from rasterio import open as rio_open  # type: ignore
-from rasterio.crs import CRS
-from rasterio.warp import transform as warp_transform
+from rasterio import io  # type: ignore[import-untyped]
+from rasterio import open as rio_open
+from rasterio.crs import CRS  # type: ignore[import-untyped]
+from rasterio.warp import transform as warp_transform  # type: ignore[import-untyped]
 from scipy.interpolate import griddata  # type: ignore
 from scipy.ndimage import gaussian_filter, median_filter  # type: ignore
+
+# Handlers and levels are the application's to set up; see gdal.py.
+LOGGER: Logger = getLogger("geotiff")
 
 ColorScale = Literal[
     "aggrnyl",
@@ -161,6 +165,7 @@ def _vectorized_xyz_extraction(
     Returns:
         NDArray[Shape["*, 3"], Float32]: 2D array of valid XYZ coordinates where each row is [longitude, latitude, elevation].
     """
+    # Compiled by numba, where print is the only output there is
     print(
         f"Longitudes shape ::: W:{longitudes.shape[0]}, H:{longitudes.shape[1]},"
         f"Latitudes shape ::: W:{latitudes.shape[0]}, H:{latitudes.shape[1]}, "
@@ -248,7 +253,7 @@ def mask_outliers_iqr(data: GeoCoordinateArray) -> NDArray[np.bool_]:
     lower_bound = q1 - 1.5 * iqr
     upper_bound = q3 + 1.5 * iqr
 
-    mask = (z_values >= lower_bound) & (z_values <= upper_bound)
+    mask: NDArray[np.bool_] = (z_values >= lower_bound) & (z_values <= upper_bound)
 
     return mask
 
@@ -267,12 +272,12 @@ def meshify(
             "Not enough points to form a mesh. At least 4 points are required."
         )
 
-    print(
+    LOGGER.info(
         f"Creating mesh with {len(xyz)} points, resolution: {points}, interpolation: {interpolation}, smooth_sigma: {smooth_sigma}"
     )
 
     @njit(
-        types.Tuple(
+        types.Tuple(  # type: ignore[no-untyped-call]
             (
                 types.npytypes.Array(types.float32, 1, "C"),
                 types.npytypes.Array(types.float32, 1, "C"),
@@ -347,7 +352,7 @@ def plotly_surface(
     x_offset: float32 = float32(0.0),
     y_offset: float32 = float32(0.0),
     z_offset: float32 = float32(0.0),
-    fig: Optional[Figure] = None,
+    fig: Figure | None = None,
 ) -> Figure:
     # Offset copies, so the caller's mesh (which may be reused or cached) is left untouched
     x_mesh, y_mesh, z_mesh = meshes
@@ -546,7 +551,7 @@ def xyz_to_geojson(
 
 
 def mesh_to_geojson(
-    meshes: NDArray[np.float64], source_crs: CRS | str | None = None
+    meshes: NDArray[np.floating[Any]], source_crs: CRS | str | None = None
 ) -> dict[str, object]:
     """
     Convert a gridded mesh into a GeoJSON MultiPolygon geometry.
@@ -638,7 +643,7 @@ def tif_to_mesh(
         try:
             with open(cache_file, "rb") as f:
                 cached: NDArray[np.float32] = pickle.load(f)
-            print("USING CACHE")
+            LOGGER.debug("USING CACHE")
             return cached
         except Exception:
             pass  # Unreadable cache: rebuild the mesh and overwrite it below
@@ -646,7 +651,7 @@ def tif_to_mesh(
     with open(tfwfile, "r") as tfw:
         with rio_open(tifffile) as tif:
             xyz = tfw_to_xyz(tfw, tif)
-            print(f"Extracted {len(xyz)} XYZ points from GeoTIFF.")
+            LOGGER.info(f"Extracted {len(xyz)} XYZ points from GeoTIFF.")
     meshes = meshify(
         xyz,
         points=points,
@@ -662,7 +667,7 @@ def tif_to_mesh(
             with open(cache_file, "wb") as f:
                 pickle.dump(meshes, f)
         except Exception as e:
-            print(f"Warning: Could not save to cache: {e}")
+            LOGGER.warning(f"Could not save to cache: {e}")
 
     return meshes
 
@@ -670,7 +675,7 @@ def tif_to_mesh(
 def graph_plotly(
     tfwfile: Path | None = None,
     tifffile: Path | None = None,
-    figure: Optional[Figure] = None,
+    figure: Figure | None = None,
     meshes: NDArray[np.float32] | None = None,
     cachedir: Path = Path(__file__).parent / "__cache__",
     points: uint16 = uint16(200),
@@ -682,20 +687,18 @@ def graph_plotly(
     opacity: float32 = float32(0.85),
 ) -> Figure:
 
-    if meshes is None and (tfwfile is None or tifffile is None):
-        raise ValueError("Either meshes or both tfwfile and tifffile must be provided.")
-
-    meshes = (
-        meshes
-        if meshes is not None
-        else tif_to_mesh(
+    if meshes is None:
+        if tfwfile is None or tifffile is None:
+            raise ValueError(
+                "Either meshes or both tfwfile and tifffile must be provided."
+            )
+        meshes = tif_to_mesh(
             tfwfile=tfwfile,
             tifffile=tifffile,
             cachedir=cachedir,
             points=points,
             use_cache=use_cache,
         )
-    )
     return plotly_surface(
         meshes,
         title="Topography Mesh",

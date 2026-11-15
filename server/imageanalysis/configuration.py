@@ -1,34 +1,26 @@
+from collections.abc import Sequence
+from functools import lru_cache
+from logging import Logger, getLogger
+from pathlib import Path
+from typing import Final
+
+from cv2 import CV_8UC1, UMat, blur, ocl
+
 from ..db import CameraModel
 
-from enum import Enum
-from os import listdir
-from pathlib import Path
-from functools import lru_cache
-from typing import Final, Generic, TypeVar, Sequence, Optional
-from logging import Logger, getLogger, basicConfig, StreamHandler, FileHandler
-from cv2 import UMat, CV_8UC1, blur, ocl
-
-basicConfig(
-    level="DEBUG",
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[StreamHandler(), FileHandler("image_analysis.log", mode="w")],
-)
-
+# Handlers and levels are the application's to set up; see roc.py.
 LOGGER: Logger = getLogger("imanalysis")
 
 current_dir = Path(__file__).parent.resolve()
 
 
-ModelType = TypeVar("ModelType", bound=CameraModel)
-
-
-def verify_gpu_setup(LOGGER: Optional[Logger] = None) -> bool:
+def verify_gpu_setup(LOGGER: Logger | None = None) -> bool:
     """
     Verify GPU setup and log OpenCL information.
     Returns True if GPU is properly configured.
 
     Args:
-        LOGGER (Optional[Logger]): The logger instance to use for logging.
+        LOGGER (Logger | None): The logger instance to use for logging.
 
     Returns:
         bool: True if GPU is properly configured, False otherwise.
@@ -95,7 +87,7 @@ def verify_gpu_setup(LOGGER: Optional[Logger] = None) -> bool:
         return False
 
 
-class Camera(Generic[ModelType]):
+class Camera:
     """
     Camera configuration class that manages paths and operations for different camera models.
     """
@@ -228,7 +220,7 @@ class Camera(Generic[ModelType]):
     @staticmethod
     def patchcheck(
         lista: Sequence[Path], listb: Sequence[Path]
-    ) -> tuple[bool, Optional[str]]:
+    ) -> tuple[bool, str | None]:
         """
         Check if two lists of paths have the same length and names.
         Returns a tuple of (bool, str) where bool indicates if they match,

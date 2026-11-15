@@ -15,9 +15,8 @@ from server.db import CameraModel, DeviceType
 def test_get_status_not_found(client: FlaskClient) -> None:
     result = StatusService.get(MAC="00:1A:2B:3C:4D:5E")
     assert (
-        result is None,
-        f"MAC address is not registered, should be None but got {result}",
-    )
+        result is None
+    ), f"MAC address is not registered, should be None but got {result}"
 
 
 @no_type_check
@@ -318,4 +317,4 @@ def test_status_exists_after_delete(client: FlaskClient) -> None:
     StationService.delete(MAC=station.MAC)
 
     exists = StatusService.exists(MAC=station.MAC)
-    assert exists == False, f"Status should not exist for delted MAC {MAC}"
+    assert exists == False, f"Status should not exist for deleted MAC {station.MAC}"

@@ -1,4 +1,5 @@
-from typing import TypedDict, Any, Optional
+from typing import Any, TypedDict
+
 
 class Airport(TypedDict, total=False):
     id: str
@@ -31,9 +32,9 @@ class MetarCloud(TypedDict, total=False):
 class RunwayVisibility(TypedDict, total=False):
     id: str
     value: int
-    prefix: Optional[str]
-    min: Optional[int]
-    max: Optional[int]
+    prefix: str | None
+    min: int | None
+    max: int | None
     trend: str
 
 
@@ -44,42 +45,42 @@ class Metar(TypedDict, total=False):
     clouds: list[MetarCloud]
     code: str
     code_colour: str
-    colour_state: Optional[str]
+    colour_state: str | None
     dewpoint: int
-    dewpoint_exact: Optional[float]
+    dewpoint_exact: float | None
     humidity: int
     is_day: bool
     observed: int
     qnh: int
     raw: str
-    recent_weather_report: Optional[str]
-    remarks: Optional[str]
-    runway_condition: Optional[list[Any]]
+    recent_weather_report: str | None
+    remarks: str | None
+    runway_condition: list[Any] | None
     runway_visibility: list[RunwayVisibility]
     snoclo: bool
     station_id: str
     sunrise: int
     sunset: int
     temperature: int
-    temperature_exact: Optional[float]
+    temperature_exact: float | None
     trends: list[Any]
-    vertical_visibility: Optional[int]
+    vertical_visibility: int | None
     visibility: int
-    visibility_sign: Optional[str]
+    visibility_sign: str | None
     visibility_color: str
-    visibility_min: Optional[int]
+    visibility_min: int | None
     warnings: list[str]
-    weather: Optional[str]
+    weather: str | None
     weather_image: str
-    weather_report: Optional[str]
+    weather_report: str | None
     wind_color: str
     wind_dir: int
-    wind_dir_max: Optional[int]
-    wind_dir_min: Optional[int]
-    wind_gust: Optional[int]
+    wind_dir_max: int | None
+    wind_dir_min: int | None
+    wind_gust: int | None
     wind_speed: int
     ws_all: str
-    ws_runways: Optional[str]
+    ws_runways: str | None
     id: int
 
 
@@ -108,5 +109,4 @@ class MetarResponse(TypedDict, total=False):
     stations: list[Station]
 
 
-class UnregisteredAirportException(Exception):
-    pass
+class UnregisteredAirportException(Exception): ...

@@ -1,6 +1,8 @@
-from numpy import array, float32, float64, nan
+from typing import cast
+
 import pytest
-from rasterio.warp import transform as warp_transform
+from numpy import array, float32, float64, nan
+from rasterio.warp import transform as warp_transform  # type: ignore[import-untyped]
 
 from server.geotiff import mesh_to_geojson, xyz_to_geojson
 
@@ -100,7 +102,7 @@ def test_xyz_to_geojson_reprojects_projected_coordinates() -> None:
     geojson = xyz_to_geojson(xyz, source_crs="EPSG:3006")
 
     assert geojson["type"] == "MultiPoint"
-    coordinates = geojson["coordinates"]
+    coordinates = cast(list[list[float]], geojson["coordinates"])
     assert coordinates[0][0] == pytest.approx(expected_xs[0])
     assert coordinates[0][1] == pytest.approx(expected_ys[0])
     assert coordinates[0][2] == pytest.approx(30.0)

@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "skydevisionimager"
+version = "1.0.0"
+description = "Environmental monitoring and computer vision platform: a Flask API for ESP32 weather stations, cloud detection and geospatial terrain processing."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [
+    { name = "Tadj Cazaubon" },
+]
+keywords = ["flask", "api", "sqlite", "opencv", "geotiff", "metar", "weather", "esp32"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: Flask",
+    "Typing :: Typed",
+]
+dependencies = [
+    "bcrypt",
+    "email-validator",
+    "Flask",
+    "numba",
+    "numpy",
+    "opencv-python",
+    "plotly",
+    "pydantic",
+    "pydantic-extra-types",
+    "python-dotenv",
+    "rasterio",
+    "requests",
+    "scipy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "mypy",
+    "black",
+    "types-requests",
+]
+
+[project.urls]
+Homepage = "https://github.com/sdvnci/skyDeVisionImager"
+Repository = "https://github.com/sdvnci/skyDeVisionImager"
+Issues = "https://github.com/sdvnci/skyDeVisionImager/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server"]
+include = [
+    "server/py.typed",
+]
+exclude = [
+    "server/images",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "server/**/*.py",
+    "server/**/py.typed",
+    "README.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+exclude = ["venv/"]
+
+[tool.black]
+target-version = ["py312"]

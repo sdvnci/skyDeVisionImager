@@ -4,18 +4,21 @@ This script also tests loading batches and boundary batches,
 as well as verifying the ability to use GPU acceleration via OpenCL.
 """
 
+from json import dump
+from logging import DEBUG, StreamHandler, basicConfig
+from typing import no_type_check
+
+from cv2 import imshow, ocl, waitKey
+from numpy import array, float32, uint8, uint16
+
+from server.db import CameraModel
 from server.imageanalysis import (
+    AnalysisConfiguration,
     Camera,
     ColourTag,
     ROCAnalyzer,
-    AnalysisConfiguration,
     verify_gpu_setup,
 )
-from cv2 import imshow, waitKey, ocl
-from numpy import array, uint8, uint16, float32
-from server.db import CameraModel
-from typing import no_type_check
-from json import dump
 
 ocl.setUseOpenCL(True)
 
@@ -96,6 +99,11 @@ def roc_load_batches():
 
 
 if __name__ == "__main__":
+    basicConfig(
+        level=DEBUG,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[StreamHandler()],
+    )
     _ = verify_gpu_setup()
 
     roc()

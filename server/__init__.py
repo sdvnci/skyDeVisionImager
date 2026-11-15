@@ -1,150 +1,111 @@
+from flask import Flask
+
+from .api import METAR_EXTENSION, QNH_AIRPORT, apiRouter
 from .db import (
-    Manager,
+    AlreadyExistsError,
     CameraModel,
+    DatabaseError,
     DeviceType,
-    UserRole,
-    StationStatus,
-    StationStatusJSON,
-    Station,
-    StationJSON,
-    Reading,
-    ReadingJSON,
+    InternalDBError,
+    InvalidInputError,
     Location,
     LocationJSON,
+    Manager,
+    NotFoundError,
+    Reading,
+    ReadingJSON,
+    ReadingService,
+    Service,
+    Station,
+    StationJSON,
+    StationService,
+    StationStatus,
+    StationStatusJSON,
+    StatusService,
+    UnauthorizedError,
     User,
     UserJSON,
-    Service,
+    UserRole,
     UserService,
-    StatusService,
-    StationService,
 )
-
-from .geotiff import (
-    GeoCoordinateArray,
-    tfw_to_xyz,
-    meshify,
-    mesh_to_geojson,
-    plotly_surface,
-    downsample_xyz,
-    preprocess_data,
-    xyz_to_geojson,
-    graph_plotly,
-)
-
-from .imageanalysis import (
-    ColorImage,
-    GrayScaleImage,
-    PixelData,
-    ComponentData,
-    FrequencyTable,
-    DecomposedData,
-    ColourSpaceInfo,
-    extract_nonblack_HSV,
-    extract_nonblack_RGB,
-    extract_nonblack_YBR,
-    ColourTag,
-    get_nonblack_pixels,
-    remove_outliers_iqr,
-    count,
-    decompose,
-    frequency_distribution,
-    get_datasets_vstack,
-    get_masks_vstack,
-    get_datasets_vstacks_sparse,
-    get_masks_vstacks_sparse,
-    get_reference_vstacks_sparse,
-    Camera,
-    ROCAnalyzer,
-    BoundaryArray,
-    verify_gpu_setup,
-)
-
-from .metar._metar import (
-    MetarResponse,
+from .metar import (
     Airport,
     Metar,
-    Runway,
     MetarCacheLayer,
+    MetarResponse,
+    Runway,
+    UnregisteredAirportException,
 )
+from .utilities import Loggable
 
-from flask import Flask
-from .api import apiRouter
+DEFAULT_QNH_AIRPORT = "ESMX"
 
 
-def create_app() -> Flask:
+def create_app(
+    metar: MetarCacheLayer | None = None,
+    *,
+    qnh_airport: str = DEFAULT_QNH_AIRPORT,
+    refresh_metar: bool = True,
+) -> Flask:
+    """
+    Build the Flask app serving the station API.
 
+    Args:
+        metar: The QNH cache to serve from. By default, one for ``qnh_airport``.
+        qnh_airport: The airport whose QNH is served when a request names none.
+        refresh_metar: Keep the QNH cache fresh from the Metar-Taf API in the
+            background. Turn off to serve only what the cache already holds.
+
+    Raises:
+        ValueError: If DBSECRET is not set in the environment.
+    """
     Manager.load()
-    secret = Manager.get_secret()
-    if secret is None:
-        raise ValueError("Database secret is None :: Please check environment")
 
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = secret
+    app.config["SECRET_KEY"] = Manager.secret().get_secret_value()
+    app.config[QNH_AIRPORT] = qnh_airport
+
+    cache = metar if metar is not None else MetarCacheLayer(airports=[qnh_airport])
+    app.extensions[METAR_EXTENSION] = cache
+    if refresh_metar:
+        _ = cache.start()
+
     app.register_blueprint(apiRouter)
     return app
 
 
 __all__ = (
-    "create_app",
-    "Manager",
+    "Airport",
+    "AlreadyExistsError",
     "CameraModel",
+    "DatabaseError",
     "DeviceType",
-    "UserRole",
-    "StationStatus",
-    "StationStatusJSON",
-    "Station",
-    "StationJSON",
-    "Reading",
-    "ReadingJSON",
+    "InternalDBError",
+    "InvalidInputError",
     "Location",
     "LocationJSON",
+    "Loggable",
+    "Manager",
+    "Metar",
+    "MetarCacheLayer",
+    "MetarResponse",
+    "NotFoundError",
+    "Reading",
+    "ReadingJSON",
+    "ReadingService",
+    "Runway",
+    "Service",
+    "Station",
+    "StationJSON",
+    "StationService",
+    "StationStatus",
+    "StationStatusJSON",
+    "StatusService",
+    "UnauthorizedError",
+    "UnregisteredAirportException",
     "User",
     "UserJSON",
-    "Service",
+    "UserRole",
     "UserService",
-    "StatusService",
-    "StationService",
-    "Service",
-    "UserService",
-    "StatusService",
-    "StationService",
-    "GeoCoordinateArray",
-    "tfw_to_xyz",
-    "meshify",
-    "mesh_to_geojson",
-    "plotly_surface",
-    "downsample_xyz",
-    "preprocess_data",
-    "xyz_to_geojson",
-    "graph_plotly",
-    "ColorImage",
-    "GrayScaleImage",
-    "PixelData",
-    "ComponentData",
-    "FrequencyTable",
-    "DecomposedData",
-    "ColourSpaceInfo",
-    "extract_nonblack_HSV",
-    "extract_nonblack_RGB",
-    "extract_nonblack_YBR",
-    "ColourTag",
-    "get_nonblack_pixels",
-    "remove_outliers_iqr",
-    "count",
-    "decompose",
-    "frequency_distribution",
-    "get_datasets_vstack",
-    "get_masks_vstack",
-    "Camera",
-    "ROCAnalyzer",
-    "BoundaryArray",
-    "get_datasets_vstacks_sparse",
-    "get_masks_vstacks_sparse",
-    "get_reference_vstacks_sparse",
-    "verify_gpu_setup",
-    "MetarResponse",
-    "Airport",
-    "Metar",
-    "Runway",
-    "MetarCacheLayer",
+    "create_app",
 )

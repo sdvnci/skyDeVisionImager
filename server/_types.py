@@ -1,13 +1,13 @@
-from typing import TypedDict, Any
+from typing import Any, TypedDict
 
 
 class ErrorDict(TypedDict, total=False):
     """
-    Schema for error responses.
-    The exct meaning for each field are loose
-    and are not strictly defined.
-    This is mostly intended to mirror the structure
-    of the error responses returned by the Ebanq API.
+    Schema for a single error in a response.
+
+    ``title`` names the kind of error, ``details`` says what went wrong,
+    ``code`` is the HTTP status as a string and ``source`` is the route that
+    raised it.
     """
 
     title: str
@@ -21,8 +21,6 @@ class ErrorDict(TypedDict, total=False):
 class ErrorResponse(TypedDict, total=False):
     """
     Errors and warning response schema.
-    This mirrors the structure of the error responses
-    returned by the Ebanq API.
     It contains a list of errors and warnings encountered during the request.
     The `timestamp` field is used to indicate when the response was generated.
     """
